@@ -8,6 +8,7 @@ import { useSafeMutate } from "@/features/use-safe-mutate";
 import { haptic } from "@/lib/haptics";
 import { nextSpaceName, suggestSpaceNames } from "@/lib/suggestions";
 import { selectStructure, useSyncClient } from "@/sync";
+import { useHighlight } from "./highlight";
 
 /**
  * Rapid room entry at the end of a level: type and press Enter to chain rooms, or tap a
@@ -28,6 +29,7 @@ export function AddSpace({
 }) {
   const client = useSyncClient();
   const safeMutate = useSafeMutate();
+  const highlight = useHighlight();
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   // Adds run one after the other so that each one sees the rooms added just before it.
@@ -47,13 +49,16 @@ export function AddSpace({
       const structure = selectStructure(client.getState().view, propertyId);
       const siblings = structure.find((group) => group.level.id === level.id)?.spaces ?? [];
       const names = structure.flatMap((group) => group.spaces.map((space) => space.name));
+      const id = newId();
       const saved = await safeMutate("createSpace", {
-        id: newId(),
+        id,
         levelId: level.id,
         name: nameFor(names),
         position: positionAtEnd(siblings),
       });
-      if (saved) haptic(6);
+      if (!saved) return;
+      haptic(6);
+      highlight(id);
     });
   }
 
