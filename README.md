@@ -7,8 +7,7 @@ drag and drop, with or without network. Every change is saved on the device firs
 once; a Hono and PostgreSQL backend keeps every device in sync in the background, and nothing typed
 is ever lost.
 
-**Live demo: [releve.onrender.com](https://releve.onrender.com)**
-<!-- TODO: confirm the URL once the Render service is deployed. -->
+**Live demo: [releve-m2ma.onrender.com](https://releve-m2ma.onrender.com)**
 
 Hosted on Render's free plan: the first request after a quiet period can take up to a minute to
 wake the server. Once visited, the app opens from its cache and syncs when the server is up.
