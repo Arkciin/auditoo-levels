@@ -20,6 +20,7 @@ import {
   DrawerTrigger,
 } from "@/components/ui/drawer";
 import { rejectionToastId } from "@/features/sync-status/rejection-toasts";
+import { formatSince } from "@/lib/relative-time";
 import { plural } from "@/lib/suggestions";
 import { cn } from "@/lib/utils";
 import {
@@ -143,18 +144,6 @@ export function SyncIndicator() {
       </DrawerContent>
     </Drawer>
   );
-}
-
-const relativeTime = new Intl.RelativeTimeFormat("fr", { numeric: "auto" });
-
-function formatSince(timestamp: number, now: number): string {
-  const seconds = Math.round((timestamp - now) / 1000);
-  if (Math.abs(seconds) < 45) return "à l’instant";
-  const minutes = Math.round(seconds / 60);
-  if (Math.abs(minutes) < 60) return relativeTime.format(minutes, "minute");
-  const hours = Math.round(minutes / 60);
-  if (Math.abs(hours) < 24) return relativeTime.format(hours, "hour");
-  return relativeTime.format(Math.round(hours / 24), "day");
 }
 
 /** How often relative times refresh while on screen: the minute is their finest unit. */
