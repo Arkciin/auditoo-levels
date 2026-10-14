@@ -24,7 +24,12 @@ export interface AppOptions {
   signal?: AbortSignal | undefined;
 }
 
-const MAX_BODY_BYTES = 1024 * 1024;
+/**
+ * Must fit the largest push a device can send, or that push would be retried as it is, forever,
+ * blocking the device's queue: 100 mutations, at worst level copies of 100 rooms with the most
+ * expensive names, about 6.5 MiB of JSON (see app.test.ts).
+ */
+export const MAX_BODY_BYTES = 8 * 1024 * 1024;
 // Below the idle timeout of common proxies and load balancers (30 to 60 seconds).
 const HEARTBEAT_INTERVAL_MS = 25_000;
 const IMMUTABLE = "public, max-age=31536000, immutable";

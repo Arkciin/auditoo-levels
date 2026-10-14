@@ -1,10 +1,17 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pullResponseSchema, pushResponseSchema } from "@repo/shared";
+import {
+  MAX_DUPLICATED_SPACES,
+  MAX_MUTATIONS_PER_PUSH,
+  mutationSchema,
+  NAME_MAX_LENGTH,
+  pullResponseSchema,
+  pushResponseSchema,
+} from "@repo/shared";
 import type { Hono } from "hono";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { createApp } from "./app";
+import { createApp, MAX_BODY_BYTES } from "./app";
 import type { SqlClient } from "./db/sql";
 import { createTestDb, mutation } from "./testing";
 
@@ -95,7 +102,7 @@ describe("API", () => {
 
     const tooLarge = await app.request("/api/push", {
       method: "POST",
-      body: "x".repeat(1024 * 1024 + 1),
+      body: "x".repeat(MAX_BODY_BYTES + 1),
     });
     expect(tooLarge.status).toBe(413);
   });
@@ -118,6 +125,38 @@ describe("API", () => {
       mutations: [{ ...invalid, id: 0 }],
     });
     expect(malformed.status).toBe(400);
+  });
+
+  it("accepts the largest push a device can send", async () => {
+    // Refused for its size, a push would be retried as it is, forever: the device's queue would
+    // be blocked. The largest mutation is a level copy with the most rooms, and lone surrogates
+    // are the costliest characters a name can hold (JSON escapes each one in six bytes).
+    const name = "\ud800".repeat(NAME_MAX_LENGTH);
+    const position = `a0${"z".repeat(126)}`; // the longest valid key
+    const id = (n: number) => `0199f0a0-0000-7000-8000-${n.toString(16).padStart(12, "0")}`;
+    const mutations = Array.from({ length: MAX_MUTATIONS_PER_PUSH }, (_, i) =>
+      mutation(i + 1, {
+        name: "duplicateLevel",
+        args: {
+          id: id(i),
+          sourceId: id(0xfffff), // unknown: each copy is rejected at once, before any write
+          name,
+          position,
+          spaces: Array.from({ length: MAX_DUPLICATED_SPACES }, (_, j) => ({
+            id: id(0x100000 + i * MAX_DUPLICATED_SPACES + j),
+            name,
+            position,
+          })),
+        },
+      }),
+    );
+    for (const largest of mutations) expect(mutationSchema.safeParse(largest).success).toBe(true);
+
+    const push = await post(createApp({ db }), "/api/push", { clientId: DEVICE, mutations });
+    expect(push.status).toBe(200);
+    expect(pushResponseSchema.parse(await push.json())).toMatchObject({
+      lastMutationId: MAX_MUTATIONS_PER_PUSH,
+    });
   });
 
   it("answers unknown API routes with a JSON 404", async () => {
