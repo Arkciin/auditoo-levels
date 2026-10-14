@@ -11,8 +11,10 @@ import {
   openTestClient,
   TestDevice,
   uuid,
+  waitForState,
 } from "@/sync/test-support/harness";
-import { presentStatus, SyncIndicator } from "./sync-indicator";
+import { OfflineBanner } from "./offline-banner";
+import { describeNextAttempt, presentStatus, SyncIndicator } from "./sync-indicator";
 
 const RETRY_PROMISE =
   " Vos modifications restent sur cet appareil et Relevé réessaie automatiquement.";
@@ -25,6 +27,7 @@ function status(overrides: Partial<SyncStatus> = {}): SyncStatus {
     pendingCount: 0,
     lastSyncedAt: null,
     lastError: null,
+    nextAttemptAt: null,
     ...overrides,
   };
 }
@@ -69,8 +72,22 @@ describe("presentStatus", () => {
       "Hors ligne",
       "Hors ligne",
     ],
+    // The browser reports a network, but requests fail or time out.
+    [
+      "a server that does not answer, even while changes are sent again",
+      status({ connection: "unreachable", phase: "syncing", sending: true, pendingCount: 3 }),
+      "unreachable",
+      "Serveur injoignable",
+      "Serveur injoignable",
+    ],
   ])("presents %s", (_, input, tone, short, title) => {
     expect(presentStatus(input)).toMatchObject({ tone, short, title });
+  });
+
+  it("does not send a user with a network looking for one when the server does not answer", () => {
+    expect(presentStatus(status({ connection: "unreachable" })).explanation).toBe(
+      "Le serveur ne répond pas : le réseau est peut-être trop faible, ou le serveur redémarre. Vos modifications sont enregistrées sur cet appareil et partiront dès qu’il répondra.",
+    );
   });
 
   it("explains a failure with the engine's message and promises a retry", () => {
@@ -91,6 +108,29 @@ describe("presentStatus", () => {
   });
 });
 
+describe("describeNextAttempt", () => {
+  const now = 1_000_000;
+
+  it("counts down to the automatic retry of a failed sync, in whole seconds", () => {
+    const failed = (inMs: number) =>
+      describeNextAttempt(status({ connection: "unreachable", nextAttemptAt: now + inMs }), now);
+    expect(failed(12_000)).toBe("Nouvel essai automatique dans 12 s.");
+    expect(failed(11_200)).toBe("Nouvel essai automatique dans 12 s.");
+    expect(failed(-300)).toBe("Nouvel essai automatique dans 1 s."); // the clock lags
+    const error = status({ phase: "error", lastError: "Erreur 503.", nextAttemptAt: now + 4_000 });
+    expect(describeNextAttempt(error, now)).toBe("Nouvel essai automatique dans 4 s.");
+  });
+
+  it("says when the retry runs, and nothing when nothing failed", () => {
+    const retrying = status({ connection: "unreachable", phase: "syncing" });
+    expect(describeNextAttempt(retrying, now)).toBe("Nouvel essai en cours…");
+    expect(describeNextAttempt(status({ phase: "syncing" }), now)).toBeNull();
+    expect(describeNextAttempt(status(), now)).toBeNull();
+    // Offline, the network's return triggers the next attempt: the sheet says so already.
+    expect(describeNextAttempt(status({ connection: "offline" }), now)).toBeNull();
+  });
+});
+
 describe("SyncIndicator", () => {
   let client: SyncClient | undefined;
 
@@ -100,15 +140,19 @@ describe("SyncIndicator", () => {
     vi.restoreAllMocks();
   });
 
+  /** The pill and the offline banner, as the header shows them. */
   function renderIndicator(syncClient: SyncClient) {
     client = syncClient;
     render(
       <SyncProvider client={syncClient}>
         <SyncIndicator />
+        <OfflineBanner />
       </SyncProvider>,
     );
     return userEvent.setup();
   }
+
+  const offlineBanner = () => screen.queryByRole("status");
 
   const pill = () => screen.getByRole("button", { name: /Voir le détail$/ });
 
@@ -216,6 +260,38 @@ describe("SyncIndicator", () => {
       "Hors ligne, 1\u00a0modification en attente. Voir le détail",
     );
     expect(pill()).toHaveTextContent("Hors ligne");
+  });
+
+  it("says « Serveur injoignable », not « Hors ligne », on a network the server does not answer on", async () => {
+    // The browser reports a network (`isOnline`), but every request fails or times out.
+    const { client: device, transport } = await TestDevice.create(new MemoryServer());
+    transport.mode = "offline";
+    await device.mutate("createProperty", { id: uuid(1), name: "Maison" });
+    device.start(); // Retries by itself, and says when.
+    await waitForState(device, (s) => s.status.nextAttemptAt !== null);
+    const user = renderIndicator(device);
+
+    expect(pill()).toHaveTextContent("Serveur injoignable");
+    expect(offlineBanner()).not.toBeInTheDocument(); // It would send the user looking for a network.
+
+    await user.click(pill());
+    const sheet = await screen.findByRole("dialog", { name: "Serveur injoignable" });
+    expect(within(sheet).getByText(/^Le serveur ne répond pas/)).toBeVisible();
+    // Testing Library reads the non-breaking space before « s » as a plain one.
+    expect(
+      within(sheet).getByText(/^Nouvel essai (automatique dans \d+ s\.|en cours…)$/),
+    ).toBeVisible();
+  });
+
+  it("shows the offline banner when the browser reports no network", async () => {
+    const { client: offline } = await TestDevice.create(new MemoryServer(), {
+      isOnline: () => false,
+    });
+    renderIndicator(offline);
+
+    expect(offlineBanner()).toHaveTextContent(
+      "Hors ligne. Vos modifications restent sur cet appareil et partiront au retour du réseau.",
+    );
   });
 
   it("reports a failed sync", async () => {

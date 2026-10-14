@@ -4,6 +4,7 @@ import {
   CloudUpload,
   type LucideIcon,
   RefreshCw,
+  ServerOff,
   TriangleAlert,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -31,7 +32,7 @@ import {
   useSyncStatus,
 } from "@/sync";
 
-type Tone = "synced" | "pending" | "syncing" | "offline" | "error";
+type Tone = "synced" | "pending" | "syncing" | "offline" | "unreachable" | "error";
 
 interface StatusPresentation {
   tone: Tone;
@@ -54,6 +55,18 @@ export function presentStatus(status: SyncStatus): StatusPresentation {
       title: "Hors ligne",
       explanation:
         "Vos modifications sont enregistrées sur cet appareil. Elles seront envoyées automatiquement au retour du réseau.",
+    };
+  }
+  // The phone has a network, but requests fail or time out: not « Hors ligne », which would send
+  // the user looking for a network they have.
+  if (status.connection === "unreachable") {
+    return {
+      tone: "unreachable",
+      icon: ServerOff,
+      short: "Serveur injoignable",
+      title: "Serveur injoignable",
+      explanation:
+        "Le serveur ne répond pas : le réseau est peut-être trop faible, ou le serveur redémarre. Vos modifications sont enregistrées sur cet appareil et partiront dès qu’il répondra.",
     };
   }
   if (status.phase === "error") {
@@ -103,6 +116,7 @@ const toneClasses: Record<Tone, string> = {
   pending: "text-muted-foreground",
   syncing: "text-muted-foreground",
   offline: "bg-warning text-warning-foreground",
+  unreachable: "bg-warning text-warning-foreground",
   error: "bg-destructive/10 text-destructive",
 };
 
@@ -147,13 +161,31 @@ export function SyncIndicator() {
   );
 }
 
+/**
+ * When Relevé tries again by itself after a failure: « Nouvel essai automatique dans 12 s. », or
+ * « Nouvel essai en cours… » while it does. `null` when nothing failed, and while offline: the
+ * network's return is what triggers the next attempt, as the sheet already says.
+ */
+export function describeNextAttempt(status: SyncStatus, now: number): string | null {
+  if (status.connection === "offline") return null;
+  if (status.nextAttemptAt !== null) {
+    const seconds = Math.max(1, Math.ceil((status.nextAttemptAt - now) / 1000));
+    return `Nouvel essai automatique dans ${seconds} s.`;
+  }
+  const failing = status.connection === "unreachable" || status.lastError !== null;
+  return failing && status.phase === "syncing" ? "Nouvel essai en cours…" : null;
+}
+
 /** How often relative times refresh while on screen: the minute is their finest unit. */
 const CLOCK_TICK_MS = 15_000;
+/** How often the countdown to the next attempt refreshes: retries come within half a minute. */
+const COUNTDOWN_TICK_MS = 1_000;
 
 /** The current time (epoch ms), refreshed every `intervalMs` while the component is mounted. */
 function useNow(intervalMs: number): number {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
+    setNow(Date.now()); // At once when the pace changes: a countdown must not start stale.
     const timer = setInterval(() => setNow(Date.now()), intervalMs);
     return () => clearInterval(timer);
   }, [intervalMs]);
@@ -165,8 +197,9 @@ function useNow(intervalMs: number): number {
 function SyncDetails() {
   const client = useSyncClient();
   const { base, pending, status, rejections } = useSyncState();
-  const now = useNow(CLOCK_TICK_MS);
+  const now = useNow(status.nextAttemptAt === null ? CLOCK_TICK_MS : COUNTDOWN_TICK_MS);
   const presentation = presentStatus(status);
+  const nextAttempt = describeNextAttempt(status, now);
   const descriptions = describePendingMutations(base, pending);
   const notApplied = new Set(rejections.map((rejection) => rejection.mutationId));
 
@@ -254,6 +287,9 @@ function SyncDetails() {
           <RefreshCw aria-hidden="true" />
           Synchroniser maintenant
         </Button>
+        {nextAttempt === null ? null : (
+          <p className="text-center text-xs text-muted-foreground">{nextAttempt}</p>
+        )}
         <p className="text-center text-xs text-muted-foreground">
           {status.lastSyncedAt === null
             ? "Pas encore synchronisé sur cet appareil."

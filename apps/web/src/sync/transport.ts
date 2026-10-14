@@ -65,26 +65,67 @@ export interface HttpTransportOptions {
    * @defaultValue 15 000 ms
    */
   readonly timeoutMs?: number;
+  /**
+   * Timeout of the first request after the server has been silent for `idleMs`: time for a
+   * sleeping server to wake up (see `createHttpTransport`).
+   * @defaultValue 60 000 ms
+   */
+  readonly wakeTimeoutMs?: number;
+  /**
+   * Silence (no answer from the server) after which it may have fallen asleep.
+   * @defaultValue 10 minutes
+   */
+  readonly idleMs?: number;
+  /**
+   * Clock measuring that silence.
+   * @defaultValue `Date.now`
+   */
+  readonly now?: () => number;
 }
 
-/** Transport over HTTP: JSON `POST /api/push` and `POST /api/pull`, responses validated. */
+/**
+ * Transport over HTTP: JSON `POST /api/push` and `POST /api/pull`, responses validated.
+ *
+ * The first request after a silence gets a longer timeout. Render's free instance sleeps after 15
+ * idle minutes, and a request then waits, held by the platform, while it wakes: up to a minute.
+ * With 15 s, every cold start (the app opened in the morning, or back from the background) would
+ * time out a few times and say « Serveur injoignable » for most of that minute, although nothing
+ * is wrong and the request is already queued at the server. So the first request after a silence
+ * long enough for the server to have fallen asleep gets a minute; if even that times out, the
+ * trouble is real and the next requests are back to 15 s. The price: a network that really hangs
+ * is reported after a minute instead of 15 s, once per silence. Nothing waits on it meanwhile
+ * (the app works from the device's data), only the indicator is late.
+ */
 export function createHttpTransport({
   baseUrl = "",
   // Kept in a local binding and called as a plain function: browsers throw "Illegal invocation"
   // when `fetch` is called as a method of another object.
   fetch: fetchImpl = globalThis.fetch,
   timeoutMs = 15_000,
+  wakeTimeoutMs = 60_000,
+  // Below Render's 15 minutes: the device only knows its own silence, not the server's (other
+  // devices may have kept it awake: the request is then simply quick).
+  idleMs = 10 * 60_000,
+  now = Date.now,
 }: HttpTransportOptions = {}): Transport {
+  /** When the server last answered, whatever it said: it was awake then. */
+  let lastAnswerAt: number | undefined;
+  /** A request given the wake-up timeout timed out since that answer: one minute is enough. */
+  let wakeUpFailed = false;
+
   async function post<T>(
     path: string,
     body: unknown,
     parse: (data: unknown) => T,
     signal: AbortSignal | undefined,
   ): Promise<T> {
+    const mayBeAsleep = lastAnswerAt === undefined || now() - lastAnswerAt >= idleMs;
+    const wakingUp = mayBeAsleep && !wakeUpFailed;
+    const timeout = wakingUp ? wakeTimeoutMs : timeoutMs;
     // Our own controller combines the caller's signal with the timeout (`AbortSignal.any` and
     // `AbortSignal.timeout` are missing from the older Safari versions still found on tablets).
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const timer = setTimeout(() => controller.abort(), timeout);
     const forwardAbort = () => controller.abort();
     if (signal?.aborted) controller.abort();
     signal?.addEventListener("abort", forwardAbort, { once: true });
@@ -93,7 +134,7 @@ export function createHttpTransport({
       // A cancellation requested by the caller is not a connectivity problem: let it through.
       if (signal?.aborted) return error;
       const message = controller.signal.aborted
-        ? `${path} timed out after ${timeoutMs} ms`
+        ? `${path} timed out after ${timeout} ms`
         : `${path} could not reach the server`;
       return new NetworkError(message, { cause: error });
     };
@@ -108,8 +149,11 @@ export function createHttpTransport({
           signal: controller.signal,
         });
       } catch (error) {
+        if (wakingUp && controller.signal.aborted && !signal?.aborted) wakeUpFailed = true;
         throw networkError(error);
       }
+      lastAnswerAt = now();
+      wakeUpFailed = false;
       if (!response.ok) {
         throw new HttpError(response.status, `${path} answered ${response.status}`);
       }

@@ -50,10 +50,12 @@ import { HttpError, NetworkError, ProtocolError, type Transport } from "./transp
 /** Sync health, for the UI's status indicator. */
 export interface SyncStatus {
   /**
-   * `"offline"` when the browser reports no network or when the last request could not reach the
-   * server, until a request succeeds.
+   * `"offline"` when the browser reports no network (`navigator.onLine === false`, reliable);
+   * `"unreachable"` when it reports one but the last request could not reach the server (it
+   * failed or timed out: a network too weak, or a server still waking up), until a request
+   * succeeds.
    */
-  readonly connection: "online" | "offline";
+  readonly connection: "online" | "offline" | "unreachable";
   /**
    * `"syncing"` while a push/pull cycle runs, background pulls included; `"error"` when the last
    * cycle failed for a reason other than connectivity (the server rejected the request or answered
@@ -76,6 +78,11 @@ export interface SyncStatus {
    * succeeds, and when the last one only failed for lack of network.
    */
   readonly lastError: string | null;
+  /**
+   * When the automatic retry of a failed cycle is due (epoch ms); `null` when none is scheduled,
+   * as while offline, where the network's return triggers the next attempt.
+   */
+  readonly nextAttemptAt: number | null;
 }
 
 /**
@@ -256,6 +263,7 @@ export class SyncClient {
   private networkDown = false;
   private lastSyncedAt: number | null = null;
   private lastError: string | null = null;
+  private nextAttemptAt: number | null = null;
 
   /** Tail of the queue that serializes state transitions. Never rejects. */
   private transitions: Promise<unknown> = Promise.resolve();
@@ -411,6 +419,7 @@ export class SyncClient {
     this.clearRetry();
     this.events?.close();
     this.events = undefined;
+    if (!this.disposed) this.publish(); // No retry is due any more.
   }
 
   /**
@@ -669,15 +678,20 @@ export class SyncClient {
   private scheduleRetry(): void {
     if (!this.started || this.disposed) return;
     this.clearRetry();
+    const delay = retryDelay(this.failures);
     this.retryTimer = setTimeout(() => {
       this.retryTimer = undefined;
       this.requestSync("routine");
-    }, retryDelay(this.failures));
+    }, delay);
+    this.nextAttemptAt = this.now() + delay;
+    this.publish();
   }
 
+  /** Cancels the scheduled retry; whoever calls it publishes the status soon after. */
   private clearRetry(): void {
     clearTimeout(this.retryTimer);
     this.retryTimer = undefined;
+    this.nextAttemptAt = null;
   }
 
   private async withSyncLock(task: () => Promise<void>): Promise<void> {
@@ -733,12 +747,13 @@ export class SyncClient {
 
   private computeStatus(pendingCount: number, previous: SyncStatus | undefined): SyncStatus {
     const next: SyncStatus = {
-      connection: this.networkDown || !this.isOnline() ? "offline" : "online",
+      connection: !this.isOnline() ? "offline" : this.networkDown ? "unreachable" : "online",
       phase: this.phase,
       sending: this.sending,
       pendingCount,
       lastSyncedAt: this.lastSyncedAt,
       lastError: this.lastError,
+      nextAttemptAt: this.nextAttemptAt,
     };
     return previous && sameStatus(previous, next) ? previous : next;
   }
@@ -1012,7 +1027,8 @@ function sameStatus(a: SyncStatus, b: SyncStatus): boolean {
     a.sending === b.sending &&
     a.pendingCount === b.pendingCount &&
     a.lastSyncedAt === b.lastSyncedAt &&
-    a.lastError === b.lastError
+    a.lastError === b.lastError &&
+    a.nextAttemptAt === b.nextAttemptAt
   );
 }
 

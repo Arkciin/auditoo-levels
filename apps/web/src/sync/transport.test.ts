@@ -82,11 +82,45 @@ describe("createHttpTransport", () => {
   });
 
   it("gives up after the timeout with a NetworkError", async () => {
-    const transport = createHttpTransport({ fetch: hanging, timeoutMs: 10 });
+    const transport = createHttpTransport({ fetch: hanging, timeoutMs: 10, wakeTimeoutMs: 10 });
 
     await expect(transport.pull({ clientId: CLIENT, cursor: 0 })).rejects.toThrow(
       new NetworkError("/api/pull timed out after 10 ms"),
     );
+  });
+
+  it("waits longer for a server that may be asleep, once per silence", async () => {
+    let clock = 0;
+    let status: number | undefined; // the server's answer, or none: the request hangs
+    const fetchMock = vi.fn<typeof fetch>((input, init) =>
+      status === undefined
+        ? hanging(input, init)
+        : Promise.resolve(new Response(JSON.stringify(PULLED), { status })),
+    );
+    const transport = createHttpTransport({
+      fetch: fetchMock,
+      timeoutMs: 10,
+      wakeTimeoutMs: 40,
+      idleMs: 60_000,
+      now: () => clock,
+    });
+    const pull = () => transport.pull({ clientId: CLIENT, cursor: 0 });
+    const timedOut = (ms: number) => new NetworkError(`/api/pull timed out after ${ms} ms`);
+
+    // Never heard from (the app just started): it may be waking up, which takes long.
+    await expect(pull()).rejects.toThrow(timedOut(40));
+    // Even that was not enough: the trouble is real, back to the usual timeout.
+    await expect(pull()).rejects.toThrow(timedOut(10));
+
+    // Any answer, an error status too, says the server is awake.
+    status = 503;
+    await expect(pull()).rejects.toBeInstanceOf(HttpError);
+    status = undefined;
+    clock += 59_999;
+    await expect(pull()).rejects.toThrow(timedOut(10));
+    // A minute without an answer: it may have fallen asleep again.
+    clock += 1;
+    await expect(pull()).rejects.toThrow(timedOut(40));
   });
 
   it("reports a non-2xx answer as an HttpError with its status", async () => {

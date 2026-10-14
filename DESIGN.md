@@ -248,7 +248,12 @@ pas pu être déplacée vers « R+1 » : le niveau n'existe plus. ».
 | A failed cycle | Retry after 1 s, doubling up to 30 s, ±20 % jitter so devices cut off together do not retry in lockstep |
 
 A cycle is push then pull, each request bounded by a 15 s timeout (weak mobile networks hang rather
-than fail). A `NetworkError` means offline, a normal state; HTTP and protocol errors show as errors.
+than fail), or a minute for the first request after 10 minutes without an answer: a sleeping Render
+instance takes that long to wake, and 15 s would report every cold start as a failure
+(`transport.ts`). A request that fails or times out while the browser reports a network shows as
+« Serveur injoignable », with a countdown to the retry in the sync sheet; « Hors ligne » is kept for
+`navigator.onLine === false`, the only case of the offline banner. Neither is an error; HTTP and
+protocol errors are.
 
 ### Several tabs and durability
 
@@ -357,7 +362,7 @@ that the list stays strictly ordered with valid keys; 500 appends keep keys at 8
 | **Smart numbering** | "Chambre" is always numbered (Chambre 1, Chambre 2…); other rooms only when they repeat (Cuisine, then Cuisine 2), counted across the whole logement (`apps/web/src/lib/suggestions.ts`). |
 | **Levels go where they belong** | French level names are ranked (Sous-sol below RDC, R+n or "2e étage" above, Combles on top), so a Sous-sol added after the RDC is inserted below it; unknown names go last. The sheet offers the likely next levels in one tap. |
 | **Undo instead of "Are you sure?"** | Deletes are soft, so each one shows a 6 s toast with "Annuler", which queues a `restore*` mutation (offline too). A confirmation dialog would tax every delete to protect the rare mistake. |
-| **Sync status always in view** | A header pill (À jour, En attente with a count, Envoi…, Hors ligne, Erreur) opens a sheet listing pending changes in plain French, with a "Synchroniser maintenant" button; a banner says what happens to work done offline. « Envoi… » only while the user's own changes are on their way: the periodic pull and pokes stay silent. |
+| **Sync status always in view** | A header pill (À jour, En attente with a count, Envoi…, Hors ligne, Serveur injoignable, Erreur) opens a sheet listing pending changes in plain French, with a "Synchroniser maintenant" button; a banner says what happens to work done offline. « Envoi… » only while the user's own changes are on their way: the periodic pull and pokes stay silent. |
 | **No silent rejection** | A change the server refuses, or that no longer applies, gets an error toast saying which and why, and stays listed in the sync sheet ("modifications non appliquées"), whose relative times keep ticking while it is open. |
 | **Legibility on site** | Atkinson Hyperlegible Next, designed by the Braille Institute for low-vision readers, for dim basements and glare; 16 px body text; one brand colour (forest `#033527`) and one accent; field outlines at 3:1 contrast. |
 | **Touch hygiene and comfort** | 44 px minimum targets; 16 px inputs (iOS zooms into smaller ones); safe-area padding; no pull-to-refresh to fight a drag; light haptics where the Vibration API exists. Dark mode follows the OS; with `prefers-reduced-motion`, animations are shortened rather than removed, so components waiting for `animationend` still close. |
@@ -383,7 +388,8 @@ that the list stays strictly ordered with valid keys; 500 appends keep keys at 8
 - **One PostgreSQL** `releve-db` (free plan, Frankfurt, the closest region to France), reachable
   only from Render's private network; `DATABASE_URL` is injected.
 - **Cold starts.** Free instances sleep after 15 idle minutes and take up to a minute to wake.
-  Offline-first absorbs it: the app opens from the service worker and IndexedDB and syncs later.
+  Offline-first absorbs it: the app opens from the service worker and IndexedDB and syncs later,
+  its first request after a silence given a minute rather than 15 s.
   `.github/workflows/keep-warm.yml` pings `/api/health` every 10 minutes once `APP_URL` is set.
 - **Restoring a backup** replaces the database: draw a new epoch right after
   (`UPDATE server_meta SET epoch = gen_random_uuid();`) so that devices start over from it.

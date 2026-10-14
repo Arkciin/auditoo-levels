@@ -208,30 +208,41 @@ describe("SyncClient", () => {
     expect(server.snapshot().spaces.get(S1)?.name).toBe("Cuisine");
   });
 
-  it("reports an unreachable server as offline and retries with exponential backoff", async () => {
+  it("tells an unreachable server from no network, says when it retries, backs off", async () => {
     // Only timers are faked: fake-indexeddb schedules its work with setImmediate.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     vi.spyOn(Math, "random").mockReturnValue(0.5); // No jitter.
     const server = new MemoryServer();
-    const { client, transport } = await createDevice(server);
+    // The browser reports a network (`isOnline`), but requests fail: a weak network, or a server
+    // waking up. Not « offline ».
+    const { client, transport } = await createDevice(server, { now: () => 5_000 });
     transport.mode = "offline";
     client.start();
-    await waitForState(client, (s) => s.status.connection === "offline"); // Retry in 1 s.
+    await waitForState(client, (s) => s.status.nextAttemptAt !== null);
+    expect(client.getState().status).toMatchObject({
+      connection: "unreachable",
+      nextAttemptAt: 6_000, // Retry in 1 s.
+    });
 
     // A change made meanwhile says nothing about the network: it waits for the retry.
     await client.mutate("createProperty", { id: P1, name: "Maison" });
     await vi.advanceTimersByTimeAsync(999);
     expect(transport.attempts).toBe(1);
     await vi.advanceTimersByTimeAsync(1); // Fails again: retry in 2 s.
-    await waitForState(client, (s) => transport.attempts === 2 && s.status.phase === "idle");
-    expect(client.getState().status).toMatchObject({ connection: "offline", lastError: null });
+    await waitForState(client, (s) => s.status.nextAttemptAt === 7_000);
+    expect(transport.attempts).toBe(2);
+    expect(client.getState().status).toMatchObject({
+      connection: "unreachable",
+      phase: "idle",
+      lastError: null,
+    });
 
     transport.mode = "online";
     await vi.advanceTimersByTimeAsync(1_999);
     expect(transport.attempts).toBe(2);
     await vi.advanceTimersByTimeAsync(1);
     await waitForState(client, (s) => s.status.pendingCount === 0);
-    expect(client.getState().status.connection).toBe("online");
+    expect(client.getState().status).toMatchObject({ connection: "online", nextAttemptAt: null });
     expect(server.snapshot().properties.has(P1)).toBe(true);
   });
 
@@ -257,7 +268,7 @@ describe("SyncClient", () => {
     const { client, transport } = await createDevice(server, { eventsUrl: "/api/events" });
     transport.mode = "offline";
     client.start();
-    await waitForState(client, (s) => s.status.connection === "offline"); // Backing off.
+    await waitForState(client, (s) => s.status.connection === "unreachable"); // Backing off.
     await client.mutate("createProperty", { id: P1, name: "Maison" }); // Waits for the retry.
     expect(transport.attempts).toBe(1);
 
