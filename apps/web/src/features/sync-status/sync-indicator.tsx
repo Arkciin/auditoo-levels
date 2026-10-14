@@ -6,7 +6,8 @@ import {
   RefreshCw,
   TriangleAlert,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -18,6 +19,7 @@ import {
   DrawerTitle,
   DrawerTrigger,
 } from "@/components/ui/drawer";
+import { rejectionToastId } from "@/features/sync-status/rejection-toasts";
 import { plural } from "@/lib/suggestions";
 import { cn } from "@/lib/utils";
 import {
@@ -136,7 +138,9 @@ export function SyncIndicator() {
           ) : null}
         </button>
       </DrawerTrigger>
-      <SyncDetails />
+      <DrawerContent>
+        <SyncDetails />
+      </DrawerContent>
     </Drawer>
   );
 }
@@ -153,40 +157,92 @@ function formatSince(timestamp: number, now: number): string {
   return relativeTime.format(Math.round(hours / 24), "day");
 }
 
-// Mounted only while the sheet is open, so the full-state subscription costs nothing otherwise.
+/** How often relative times refresh while on screen: the minute is their finest unit. */
+const CLOCK_TICK_MS = 15_000;
+
+/** The current time (epoch ms), refreshed every `intervalMs` while the component is mounted. */
+function useNow(intervalMs: number): number {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(timer);
+  }, [intervalMs]);
+  return now;
+}
+
+// The drawer mounts its content only while the sheet is open (or closing): the full-state
+// subscription and the clock cost nothing otherwise.
 function SyncDetails() {
   const client = useSyncClient();
-  const { base, pending, status } = useSyncState();
+  const { base, pending, status, rejections } = useSyncState();
+  const now = useNow(CLOCK_TICK_MS);
   const presentation = presentStatus(status);
   const descriptions = describePendingMutations(base, pending);
 
+  // The sheet lists them: their toasts would only cover the list.
+  useEffect(() => {
+    for (const rejection of rejections) toast.dismiss(rejectionToastId(rejection.mutationId));
+  }, [rejections]);
+
   return (
-    <DrawerContent>
+    <>
       <DrawerHeader>
         <DrawerTitle>{presentation.title}</DrawerTitle>
         <DrawerDescription>{presentation.explanation}</DrawerDescription>
       </DrawerHeader>
-      <section className="px-4" aria-labelledby="pending-title">
-        <h3 id="pending-title" className="pb-1 text-sm font-semibold">
-          {descriptions.length === 0
-            ? "Aucune modification en attente"
-            : `${plural(descriptions.length, "modification", "modifications")} sur cet appareil`}
-        </h3>
-        {descriptions.length > 0 ? (
-          <ol className="max-h-[40dvh] overflow-y-auto border-t border-rule">
-            {descriptions.map((description, index) => (
-              <li
-                // Descriptions are not unique and the list is append-only: the index is stable.
-                // biome-ignore lint/suspicious/noArrayIndexKey: see above
-                key={index}
-                className="border-b border-rule py-2.5 text-sm"
-              >
-                {description}
-              </li>
-            ))}
-          </ol>
+      <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-4">
+        <section aria-labelledby="pending-title">
+          <h3 id="pending-title" className="pb-1 text-sm font-semibold">
+            {descriptions.length === 0
+              ? "Aucune modification en attente"
+              : `${plural(descriptions.length, "modification", "modifications")} sur cet appareil`}
+          </h3>
+          {descriptions.length > 0 ? (
+            <ol className="border-t border-rule">
+              {descriptions.map((description, index) => (
+                <li
+                  // Descriptions are not unique and the list is append-only: the index is stable.
+                  // biome-ignore lint/suspicious/noArrayIndexKey: see above
+                  key={index}
+                  className="border-b border-rule py-2.5 text-sm"
+                >
+                  {description}
+                </li>
+              ))}
+            </ol>
+          ) : null}
+        </section>
+        {rejections.length > 0 ? (
+          <section aria-labelledby="rejections-title">
+            <h3 id="rejections-title" className="pb-1 text-sm font-semibold">
+              {plural(
+                rejections.length,
+                "modification non appliquée",
+                "modifications non appliquées",
+              )}
+            </h3>
+            <ol className="border-t border-rule">
+              {rejections.map((rejection) => (
+                <li key={rejection.mutationId} className="flex gap-2 border-b border-rule py-2.5">
+                  <TriangleAlert
+                    aria-hidden="true"
+                    className="mt-0.5 size-4 shrink-0 text-destructive"
+                  />
+                  <div className="min-w-0">
+                    <p className="text-sm">{rejection.message}</p>
+                    <time
+                      dateTime={new Date(rejection.at).toISOString()}
+                      className="block text-xs text-muted-foreground first-letter:uppercase"
+                    >
+                      {formatSince(rejection.at, now)}
+                    </time>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </section>
         ) : null}
-      </section>
+      </div>
       <DrawerFooter>
         <Button
           size="lg"
@@ -199,9 +255,9 @@ function SyncDetails() {
         <p className="text-center text-xs text-muted-foreground">
           {status.lastSyncedAt === null
             ? "Pas encore synchronisé sur cet appareil."
-            : `Dernière synchronisation ${formatSince(status.lastSyncedAt, Date.now())}.`}
+            : `Dernière synchronisation ${formatSince(status.lastSyncedAt, now)}.`}
         </p>
       </DrawerFooter>
-    </DrawerContent>
+    </>
   );
 }
