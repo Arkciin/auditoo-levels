@@ -1,6 +1,3 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { defineConfig, devices } from "@playwright/test";
 
 // End-to-end tests run against the production server (API + built web app), so build first:
@@ -8,11 +5,7 @@ import { defineConfig, devices } from "@playwright/test";
 const PORT = 4174;
 const baseURL = `http://localhost:${PORT}`;
 
-// A fresh, empty database for every run. Workers re-evaluate this file: they inherit the
-// directory created by the runner through the environment instead of creating their own.
-process.env.E2E_PGLITE_DATA_DIR ??= mkdtempSync(join(tmpdir(), "releve-e2e-"));
-const pgliteDataDir = process.env.E2E_PGLITE_DATA_DIR;
-
+// Optional: a Chromium already on the machine instead of the one `playwright install` downloads.
 const chromiumPath = process.env.PLAYWRIGHT_CHROMIUM_PATH;
 
 export default defineConfig({
@@ -20,13 +13,16 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  reporter: process.env.CI ? "github" : "list",
+  // In CI: annotations on the run, plus an HTML report (with traces) uploaded when a test fails.
+  reporter: process.env.CI ? [["github"], ["html", { open: "never" }]] : "list",
   use: {
     baseURL,
     trace: "on-first-retry",
+    screenshot: "only-on-failure",
   },
   projects: [
     {
+      // A phone (touch, coarse pointer): rows are deleted by swiping, not with a delete button.
       name: "mobile-chromium",
       use: {
         ...devices["Pixel 7"],
@@ -41,7 +37,10 @@ export default defineConfig({
     timeout: 60_000,
     env: {
       PORT: String(PORT),
-      PGLITE_DATA_DIR: pgliteDataDir,
+      // A fresh, empty database for every run, gone with the server: never a real one, even when
+      // the shell has a DATABASE_URL (blank means unset for the server).
+      DATABASE_URL: "",
+      PGLITE_DATA_DIR: "memory://",
     },
   },
 });

@@ -1,0 +1,34 @@
+name: Keep warm
+
+# Render's free plan puts a web service to sleep after 15 minutes without traffic, and the next
+# request waits for a cold start, up to a minute. A reviewer opening the app would see their first
+# sync hang meanwhile, so the deployed app gets a request every 10 minutes.
+#
+# Set the APP_URL repository variable (Settings > Secrets and variables > Actions > Variables) to
+# the app's address, e.g. https://releve.onrender.com. Without it, the job is skipped.
+#
+# Costs: one always-awake service uses about 744 of the 750 instance hours Render's free plan gives
+# a workspace each month. Actions minutes are free for a public repository; a private one is billed
+# a minute per run, about 4,300 a month. GitHub runs schedules from the default branch only, may
+# start them a few minutes late, and pauses them after 60 days without activity in the repository.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    if: vars.APP_URL != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Request the health check
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+        # A generous timeout: a sleeping service answers once it has started.
+        run: >-
+          curl --fail --silent --show-error --max-time 120 --retry 2 --retry-delay 10
+          "${APP_URL%/}/api/health"
