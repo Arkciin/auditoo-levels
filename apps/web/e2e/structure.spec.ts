@@ -4,6 +4,7 @@ import {
   expect,
   expectLevels,
   expectRooms,
+  levelAction,
   reloadOnceSynced,
   renameInPlace,
   room,
@@ -99,5 +100,40 @@ test("rename a room in place, undo the deletion of a room or a level", async ({ 
     await expectLevels(page, ["RDC", "R+1"]);
     await expectRooms(page, "RDC", ["Entrée", "Salon", "Cuisine"]);
     await expectRooms(page, "R+1", ["Chambre 1", "Chambre 2"]);
+  });
+});
+
+test("duplicate a level with its rooms, then undo a copy", async ({ page }) => {
+  await createProperty(page, uniqueName("Immeuble"));
+  await addLevel(page, "RDC");
+  await typeRooms(page, "RDC", ["Entrée", "Séjour"]);
+  await addLevel(page, "R+1");
+  await typeRooms(page, "R+1", ["Chambre 1", "Chambre 2", "Salle de bain"]);
+  await expect(structureSummary(page)).toHaveText("2 niveaux, 5 pièces");
+
+  await test.step("a floor becomes the next floor, its bedrooms numbered after the others", async () => {
+    await levelAction(page, "R+1", "Dupliquer le niveau");
+    await expect(toast(page, "Niveau « R+1 » dupliqué en « R+2 » avec ses 3 pièces")).toBeVisible();
+    await expectLevels(page, ["RDC", "R+1", "R+2"]);
+    await expectRooms(page, "R+2", ["Chambre 3", "Chambre 4", "Salle de bain"]);
+    await expect(structureSummary(page)).toHaveText("3 niveaux, 8 pièces");
+  });
+
+  await test.step("another level is copied right after it; undo takes the copy back", async () => {
+    const message = "Niveau « RDC » dupliqué en « RDC (copie) » avec ses 2 pièces";
+    await levelAction(page, "RDC", "Dupliquer le niveau");
+    await expectLevels(page, ["RDC", "RDC (copie)", "R+1", "R+2"]);
+    await expectRooms(page, "RDC (copie)", ["Entrée", "Séjour"]);
+
+    await undo(page, message);
+    await expectLevels(page, ["RDC", "R+1", "R+2"]);
+    await expect(structureSummary(page)).toHaveText("3 niveaux, 8 pièces");
+  });
+
+  await test.step("everything is saved", async () => {
+    await reloadOnceSynced(page);
+    await expectLevels(page, ["RDC", "R+1", "R+2"]);
+    await expectRooms(page, "R+1", ["Chambre 1", "Chambre 2", "Salle de bain"]);
+    await expectRooms(page, "R+2", ["Chambre 3", "Chambre 4", "Salle de bain"]);
   });
 });

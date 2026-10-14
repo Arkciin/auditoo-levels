@@ -37,7 +37,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { type Level, positionAtIndex, type Space } from "@repo/shared";
-import { EllipsisVertical, GripVertical, Pencil, Plus, Trash } from "lucide-react";
+import { Copy, EllipsisVertical, GripVertical, Pencil, Plus, Trash } from "lucide-react";
 import { type ComponentProps, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -58,6 +58,8 @@ import { plural } from "@/lib/suggestions";
 import { cn } from "@/lib/utils";
 import type { LevelStructure } from "@/sync";
 import { AddSpace } from "./add-space";
+import { HighlightProvider, HighlightTint, scrollBehavior, useHighlight } from "./highlight";
+import { useDuplicateLevel } from "./use-duplicate-level";
 
 type Containers = Readonly<Record<string, readonly string[]>>;
 
@@ -237,46 +239,54 @@ export function StructureBoard({
   }
 
   return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={collisionDetection}
-      measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
-      onDragStart={handleDragStart}
-      onDragOver={handleDragOver}
-      onDragEnd={(event) => void handleDragEnd(event)}
-      onDragCancel={handleDragCancel}
-      accessibility={{ announcements, screenReaderInstructions }}
-    >
-      <SortableContext items={levelIds} strategy={verticalListSortingStrategy}>
-        <div className="flex flex-col">
-          {levels.map((level) => (
-            <LevelSection
-              key={level.id}
-              propertyId={propertyId}
-              level={level}
-              spaceIds={containers[level.id] ?? []}
-              spacesById={spacesById}
-              autoAdd={autoAddLevelId === level.id}
-              onAutoAddHandled={onAutoAddHandled}
-            />
-          ))}
-        </div>
-      </SortableContext>
-      {createPortal(
-        <DragOverlay>
-          {active ? (
-            <DragPreview
-              active={active}
-              levels={levels}
-              spacesById={spacesById}
-              containers={containers}
-            />
-          ) : null}
-        </DragOverlay>,
-        document.body,
-      )}
-    </DndContext>
+    <HighlightProvider>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={collisionDetection}
+        measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
+        onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
+        onDragEnd={(event) => void handleDragEnd(event)}
+        onDragCancel={handleDragCancel}
+        accessibility={{ announcements, screenReaderInstructions }}
+      >
+        <SortableContext items={levelIds} strategy={verticalListSortingStrategy}>
+          <div className="flex flex-col">
+            {levels.map((level) => (
+              <LevelSection
+                key={level.id}
+                propertyId={propertyId}
+                level={level}
+                spaceIds={containers[level.id] ?? []}
+                spacesById={spacesById}
+                autoAdd={autoAddLevelId === level.id}
+                onAutoAddHandled={onAutoAddHandled}
+              />
+            ))}
+          </div>
+        </SortableContext>
+        {createPortal(
+          <DragOverlay>
+            {active ? (
+              <DragPreview
+                active={active}
+                levels={levels}
+                spacesById={spacesById}
+                containers={containers}
+              />
+            ) : null}
+          </DragOverlay>,
+          document.body,
+        )}
+      </DndContext>
+    </HighlightProvider>
   );
+}
+
+/** « avec ses 3 pièces », « avec sa pièce », or nothing: how toasts mention a level's rooms. */
+function withRooms(count: number): string {
+  if (count === 0) return "";
+  return count === 1 ? " avec sa pièce" : ` avec ses ${count} pièces`;
 }
 
 function LevelSection({
@@ -307,6 +317,8 @@ function LevelSection({
     data: { type: "level", name: level.name } satisfies DragData,
   });
   const safeMutate = useSafeMutate();
+  const duplicateLevel = useDuplicateLevel(propertyId);
+  const highlight = useHighlight();
   const [renaming, setRenaming] = useState(false);
   const [adding, setAdding] = useState(false);
   const sectionRef = useRef<HTMLElement | null>(null);
@@ -319,7 +331,7 @@ function LevelSection({
   useEffect(() => {
     if (!autoAdd) return;
     setAdding(true);
-    sectionRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+    sectionRef.current?.scrollIntoView({ block: "start", behavior: scrollBehavior() });
     onAutoAddHandled();
   }, [autoAdd, onAutoAddHandled]);
 
@@ -329,14 +341,20 @@ function LevelSection({
 
   async function remove() {
     if (!(await safeMutate("deleteLevel", { id: level.id }))) return;
-    const rooms =
-      spaces.length === 0
-        ? ""
-        : spaces.length === 1
-          ? " avec sa pièce"
-          : ` avec ses ${spaces.length} pièces`;
-    toastUndo(`Niveau ${quote(level.name)} supprimé${rooms}`, () => {
+    toastUndo(`Niveau ${quote(level.name)} supprimé${withRooms(spaces.length)}`, () => {
       void safeMutate("restoreLevel", { id: level.id });
+    });
+  }
+
+  async function duplicate() {
+    const copy = await duplicateLevel(level.id);
+    if (!copy) return;
+    haptic(8);
+    // Its name first: a copy can be taller than the screen.
+    highlight(copy.id, { reveal: "start" });
+    const rooms = withRooms(copy.spaces.length);
+    toastUndo(`Niveau ${quote(level.name)} dupliqué en ${quote(copy.name)}${rooms}`, () => {
+      void safeMutate("deleteLevel", { id: copy.id });
     });
   }
 
@@ -348,7 +366,8 @@ function LevelSection({
       }}
       style={{ transform: CSS.Translate.toString(transform), transition }}
       aria-label={`Niveau ${level.name}`}
-      className={cn("scroll-mt-20 pt-5", isDragging && "opacity-40")}
+      data-highlight-id={level.id}
+      className={cn("relative scroll-mt-6 pt-5", isDragging && "opacity-40")}
     >
       <SwipeToDelete onDelete={() => void remove()} disabled={renaming}>
         {/* The floor line: the datum marker's apex rests on it, as on a building section. */}
@@ -404,6 +423,10 @@ function LevelSection({
                 <Plus />
                 Ajouter une pièce
               </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => void duplicate()}>
+                <Copy />
+                Dupliquer le niveau
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem variant="destructive" onSelect={() => void remove()}>
                 <Trash />
@@ -433,6 +456,8 @@ function LevelSection({
         open={adding}
         onOpenChange={setAdding}
       />
+      {/* Last, so that it paints over the rows, which are positioned too. */}
+      <HighlightTint id={level.id} className="top-5" />
     </section>
   );
 }
@@ -468,6 +493,7 @@ function SpaceRow({ space }: { space: Space }) {
     <li
       ref={setNodeRef}
       style={{ transform: CSS.Translate.toString(transform), transition }}
+      data-highlight-id={space.id}
       className={cn("relative", isDragging && "z-10 opacity-40")}
     >
       <SwipeToDelete onDelete={() => void remove()} disabled={renaming}>
@@ -506,6 +532,7 @@ function SpaceRow({ space }: { space: Space }) {
           />
         </div>
       </SwipeToDelete>
+      <HighlightTint id={space.id} />
     </li>
   );
 }

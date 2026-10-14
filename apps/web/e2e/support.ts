@@ -232,6 +232,12 @@ export async function typeRooms(page: Page, levelName: string, names: string[]):
   }
 }
 
+/** Picks `action` in the ⋮ menu of a level ("Dupliquer le niveau"…). */
+export async function levelAction(page: Page, levelName: string, action: string): Promise<void> {
+  await page.getByRole("button", { name: `Actions du niveau ${levelName}`, exact: true }).tap();
+  await page.getByRole("menuitem", { name: action, exact: true }).tap();
+}
+
 /** Renames by tapping a name (of a logement, level or room), typing, then Enter. */
 export async function renameInPlace(name: Locator, field: Locator, newName: string): Promise<void> {
   await name.tap();

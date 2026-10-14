@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  duplicateLevelIndex,
+  duplicateLevelName,
+  duplicateSpaceNames,
   levelInsertIndex,
   levelRank,
   nextSpaceName,
@@ -76,6 +79,66 @@ describe("nextSpaceName", () => {
   it("numbers other rooms only when they repeat", () => {
     expect(nextSpaceName("WC", ["Cuisine"])).toBe("WC");
     expect(nextSpaceName("WC", ["WC"])).toBe("WC 2");
+  });
+});
+
+describe("duplicateLevelName", () => {
+  it("makes a floor the next free floor above it", () => {
+    expect(duplicateLevelName("R+1", ["RDC", "R+1"])).toBe("R+2");
+    expect(duplicateLevelName("R+1", ["RDC", "R+1", "R+2", "3e étage", "Combles"])).toBe("R+4");
+    expect(duplicateLevelName("R+2", ["R+1", "R+2", "R+4"])).toBe("R+3");
+  });
+
+  it("keeps the spelling of the source", () => {
+    expect(duplicateLevelName("1er étage", ["1er étage"])).toBe("2e étage");
+    expect(duplicateLevelName("2ème étage", ["2ème étage"])).toBe("3ème étage");
+    expect(duplicateLevelName("Étage 1", ["Étage 1"])).toBe("Étage 2");
+    expect(duplicateLevelName("r + 1", ["r + 1"])).toBe("r + 2");
+  });
+
+  it("names any other level a copy, numbered when the name is taken", () => {
+    expect(duplicateLevelName("RDC", ["RDC"])).toBe("RDC (copie)");
+    expect(duplicateLevelName("Sous-sol", ["Sous-sol"])).toBe("Sous-sol (copie)");
+    expect(duplicateLevelName("Combles", ["Combles"])).toBe("Combles (copie)");
+    expect(duplicateLevelName("Mezzanine", ["Mezzanine", "Mezzanine (copie)"])).toBe(
+      "Mezzanine (copie 2)",
+    );
+    // A copy of a copy is a copy of the original.
+    expect(duplicateLevelName("RDC (copie)", ["RDC", "RDC (copie)"])).toBe("RDC (copie 2)");
+  });
+
+  it("stays within 80 characters, without splitting a character", () => {
+    const long = `${"x".repeat(70)}🏠🏠🏠🏠🏠`; // 80 UTF-16 code units
+    const copy = duplicateLevelName(long, [long]);
+    expect(copy).toBe(`${"x".repeat(70)}🏠 (copie)`);
+    expect(copy.length).toBeLessThanOrEqual(80);
+  });
+});
+
+describe("duplicateLevelIndex", () => {
+  const levels = [{ name: "Sous-sol" }, { name: "RDC" }, { name: "R+1" }, { name: "Combles" }];
+
+  it("puts a floor where floors belong", () => {
+    expect(duplicateLevelIndex(levels, 2, "R+2")).toBe(3);
+  });
+
+  it("puts anything else right after its source", () => {
+    expect(duplicateLevelIndex(levels, 0, "Sous-sol (copie)")).toBe(1);
+    expect(duplicateLevelIndex(levels, 1, "RDC (copie)")).toBe(2);
+  });
+});
+
+describe("duplicateSpaceNames", () => {
+  it("gives bedrooms the next free numbers of the logement and keeps the other names", () => {
+    const source = ["Palier", "Chambre 1", "chambre 2", "Chambre parentale", "WC 2"];
+    const property = ["Entrée", "WC", ...source, "Chambre 3"];
+    expect(duplicateSpaceNames(source, property)).toEqual([
+      "Palier",
+      "Chambre 4",
+      "Chambre 5",
+      "Chambre parentale",
+      "WC 2",
+    ]);
   });
 });
 
