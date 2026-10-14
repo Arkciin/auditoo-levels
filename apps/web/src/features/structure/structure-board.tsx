@@ -471,6 +471,12 @@ function LevelSection({
           ))}
         </ul>
       </SortableContext>
+      {/* An empty level shows no list to aim at: say that rooms can come from elsewhere too. */}
+      {spaces.length === 0 && !adding && onMoveSpace ? (
+        <p className="pt-3 pr-4 pl-10 text-sm text-muted-foreground">
+          {"Aucune pièce\u00a0: ajoutez-en une, ou déplacez-en une ici."}
+        </p>
+      ) : null}
       <AddSpace
         propertyId={propertyId}
         level={level}
