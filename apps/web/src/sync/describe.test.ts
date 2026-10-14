@@ -1,6 +1,11 @@
 import { type Mutation, MutationRejectedError, mutationArgsSchemas } from "@repo/shared";
 import { describe, expect, it } from "vitest";
-import { describeMutation, describeMutationError, describePendingMutations } from "./describe";
+import {
+  describeMutation,
+  describeMutationError,
+  describePendingMutations,
+  describeRejection,
+} from "./describe";
 import { StorageClosedError } from "./storage";
 import { type Action, snapshotOf, uuid } from "./test-support/fixtures";
 
@@ -30,9 +35,9 @@ function mutation(action: Action): Mutation {
   return { id: sequence, timestamp: 1_000, ...action };
 }
 
-/** Writes expectations with plain spaces; French typography wants U+00A0 inside « ». */
+/** Writes expectations with plain spaces; French typography wants U+00A0 inside « » and before : */
 function french(text: string): string {
-  return text.replaceAll("« ", "«\u00a0").replaceAll(" »", "\u00a0»");
+  return text.replaceAll("« ", "«\u00a0").replaceAll(" »", "\u00a0»").replaceAll(" :", "\u00a0:");
 }
 
 describe("describeMutation", () => {
@@ -164,6 +169,133 @@ describe("describeMutationError", () => {
     expect(describeMutationError(new StorageClosedError(reload))).toBe(reload);
     expect(describeMutationError(new Error("boom"))).toBe(
       "La modification n'a pas pu être enregistrée sur l'appareil.",
+    );
+  });
+});
+
+describe("describeRejection", () => {
+  const refused = "le serveur a refusé de l'enregistrer";
+
+  it.each<[string, Action]>([
+    [
+      "Le logement « Villa » n'a pas pu être créé",
+      { name: "createProperty", args: { id: uuid(2), name: "Villa" } },
+    ],
+    [
+      "Le logement « 12 rue des Lilas » n'a pas pu être renommé en « Villa »",
+      { name: "renameProperty", args: { id: PROPERTY, name: "Villa" } },
+    ],
+    [
+      "Le logement « 12 rue des Lilas » n'a pas pu être supprimé",
+      { name: "deleteProperty", args: { id: PROPERTY } },
+    ],
+    [
+      "Le logement « 12 rue des Lilas » n'a pas pu être restauré",
+      { name: "restoreProperty", args: { id: PROPERTY } },
+    ],
+    [
+      "Le niveau « R+2 » n'a pas pu être ajouté",
+      {
+        name: "createLevel",
+        args: { id: uuid(13), propertyId: PROPERTY, name: "R+2", position: "a2" },
+      },
+    ],
+    [
+      "Le niveau « RDC » n'a pas pu être renommé en « Rez-de-chaussée »",
+      { name: "renameLevel", args: { id: RDC, name: "Rez-de-chaussée" } },
+    ],
+    [
+      "Le niveau « R+1 » n'a pas pu être déplacé",
+      { name: "moveLevel", args: { id: R1, position: "Zz" } },
+    ],
+    ["Le niveau « RDC » n'a pas pu être supprimé", { name: "deleteLevel", args: { id: RDC } }],
+    ["Le niveau « R+1 » n'a pas pu être restauré", { name: "restoreLevel", args: { id: R1 } }],
+    [
+      "La pièce « Salon » n'a pas pu être ajoutée",
+      { name: "createSpace", args: { id: uuid(24), levelId: RDC, name: "Salon", position: "a3" } },
+    ],
+    [
+      "La pièce « Cuisine » n'a pas pu être renommée en « Cellier »",
+      { name: "renameSpace", args: { id: KITCHEN, name: "Cellier" } },
+    ],
+    [
+      "La pièce « WC » n'a pas pu être déplacée",
+      { name: "moveSpace", args: { id: WC, levelId: RDC, position: "Zz" } },
+    ],
+    [
+      "La pièce « WC » n'a pas pu être déplacée vers « R+1 »",
+      { name: "moveSpace", args: { id: WC, levelId: R1, position: "a0" } },
+    ],
+    ["La pièce « Cave » n'a pas pu être supprimée", { name: "deleteSpace", args: { id: CELLAR } }],
+    ["La pièce « Cave » n'a pas pu être restaurée", { name: "restoreSpace", args: { id: CELLAR } }],
+  ])("%s", (expected, action) => {
+    expect(describeRejection(mutation(action), base, "refused_by_database")).toBe(
+      french(`${expected} : ${refused}.`),
+    );
+  });
+
+  it("says why in words, whatever the server's code", () => {
+    const rename = mutation({ name: "renameSpace", args: { id: KITCHEN, name: "Cellier" } });
+    const why = (reason: string) => describeRejection(rename, base, reason);
+
+    expect(why("invalid")).toMatch(/: le serveur a jugé la modification invalide\.$/);
+    expect(why("refused_by_database")).toMatch(/: le serveur a refusé de l'enregistrer\.$/);
+    // A code from a newer server.
+    expect(why("forbidden")).toMatch(/: le serveur a refusé la modification\.$/);
+    // Nothing missing that the device can see: someone else's change got in the way.
+    expect(why("not_applicable")).toMatch(/: les données ont changé entre-temps\.$/);
+  });
+
+  it("tells which entity was missing where it was refused, named as before it", () => {
+    const otherProperty = uuid(3);
+    const elsewhere = uuid(31);
+    const refusedOn = snapshotOf({
+      properties: [{ id: otherProperty, name: "Villa", createdAt: 1, deletedAt: null }],
+      levels: [
+        { id: RDC, propertyId: PROPERTY, name: "RDC", position: "a0", deletedAt: null },
+        { id: elsewhere, propertyId: otherProperty, name: "RDC", position: "a0", deletedAt: null },
+      ],
+      spaces: [{ id: KITCHEN, levelId: RDC, name: "Cuisine", position: "a0", deletedAt: null }],
+    });
+    const notApplicable = (action: Action) =>
+      describeRejection(mutation(action), base, "not_applicable", refusedOn);
+
+    expect(
+      notApplicable({ name: "moveSpace", args: { id: KITCHEN, levelId: R1, position: "a0" } }),
+    ).toBe(
+      french(
+        "La pièce « Cuisine » n'a pas pu être déplacée vers « R+1 » : le niveau n'existe plus.",
+      ),
+    );
+    expect(notApplicable({ name: "renameSpace", args: { id: WC, name: "Toilettes" } })).toBe(
+      french("La pièce « WC » n'a pas pu être renommée en « Toilettes » : elle n'existe plus."),
+    );
+    expect(notApplicable({ name: "renameLevel", args: { id: R1, name: "Étage" } })).toBe(
+      french("Le niveau « R+1 » n'a pas pu être renommé en « Étage » : il n'existe plus."),
+    );
+    expect(
+      notApplicable({
+        name: "createSpace",
+        args: { id: uuid(24), levelId: RDC, name: "Salon", position: "a1" },
+      }),
+    ).toBe(french("La pièce « Salon » n'a pas pu être ajoutée : le logement n'existe plus."));
+    expect(notApplicable({ name: "restoreProperty", args: { id: PROPERTY } })).toBe(
+      french("Le logement « 12 rue des Lilas » n'a pas pu être restauré : il n'existe plus."),
+    );
+    expect(
+      notApplicable({
+        name: "moveSpace",
+        args: { id: KITCHEN, levelId: elsewhere, position: "a0" },
+      }),
+    ).toMatch(/: une pièce ne peut pas changer de logement\.$/);
+  });
+
+  it("falls back to generic nouns for entities it cannot name", () => {
+    const empty = snapshotOf({});
+    const rename = mutation({ name: "renameSpace", args: { id: KITCHEN, name: "Cellier" } });
+
+    expect(describeRejection(rename, empty, "not_applicable")).toBe(
+      french("La pièce n'a pas pu être renommée en « Cellier » : elle n'existe plus."),
     );
   });
 });

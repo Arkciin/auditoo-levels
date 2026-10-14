@@ -62,25 +62,28 @@ describe("convergence", () => {
     const warn = vi.spyOn(console, "warn");
     const error = vi.spyOn(console, "error");
 
-    const { server } = await runScenario(seed, { wipes: [] });
+    const { server, reported } = await runScenario(seed, { wipes: [] });
 
     expect(server.snapshot().spaces.size).toBeGreaterThan(10); // The scenario did build something.
     // Every mutation reached the server (checked by runScenario), and none was rejected: each one
-    // applied on its device, so it applied on the server too.
+    // applied on its device, so it applied on the server too. Nor did any pending mutation ever
+    // stop applying on its device: no user was told of a change that did not apply.
     expect(server.rejected).toEqual([]);
-    expect(warn).not.toHaveBeenCalled(); // No pending mutation ever stopped applying locally.
+    expect([...reported.values()].flatMap((ids) => [...ids])).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
     expect(error).not.toHaveBeenCalled();
   });
 
   it.each(WIPE_SEEDS)(
     "devices converge across wipes of the server database (seed %i)",
     async (seed) => {
-      // Logged on purpose: devices starting over, and their mutations on what the wipes destroyed.
+      // Logged on purpose: devices starting over from a new database.
       vi.spyOn(console, "warn").mockImplementation(() => {});
       const error = vi.spyOn(console, "error");
 
       // What a wipe destroyed is gone, but whatever was still pending on a device then, or was
-      // done since, must have reached the new database (checked by runScenario).
+      // done since, must have reached the new database, and every mutation it rejected must have
+      // been reported to its user (both checked by runScenario).
       await runScenario(seed, { wipes: [100, 200] });
 
       expect(error).not.toHaveBeenCalled();
@@ -91,6 +94,8 @@ describe("convergence", () => {
 interface Scenario {
   readonly server: MemoryServer;
   readonly devices: readonly TestDevice[];
+  /** Ids of the mutations each device reported as not applying, across its restarts. */
+  readonly reported: ReadonlyMap<TestDevice, ReadonlySet<number>>;
 }
 
 /**
@@ -121,6 +126,14 @@ async function runScenario(
   const mustReach = new Map<TestDevice, Set<number>>(devices.map((device) => [device, new Set()]));
   /** Property each space was created in: moves must never take it elsewhere. */
   const propertyOfSpace = new Map<string, string>();
+  const reported = new Map<TestDevice, Set<number>>(devices.map((device) => [device, new Set()]));
+  /** Records what the device's current client reports: at startup (listed), then as it goes. */
+  const listen = (device: TestDevice) => {
+    const ids = reported.get(device);
+    for (const rejection of device.client.getState().rejections) ids?.add(rejection.mutationId);
+    device.client.onRejected((rejection) => ids?.add(rejection.mutationId));
+  };
+  for (const device of devices) listen(device);
 
   /** The user acts on what the device shows at this very moment. */
   const act = async (device: TestDevice) => {
@@ -172,6 +185,7 @@ async function runScenario(
       await syncing;
     } else {
       await device.restart();
+      listen(device);
     }
     await expectConsistent(device);
   }
@@ -203,8 +217,14 @@ async function runScenario(
     expect(missing).toEqual([]);
   }
   expect(server.lostMutations).toEqual([]);
+  // No silent rejection: whatever the database rejected, its device told the user, even when the
+  // response saying so was lost or the device restarted meanwhile.
+  for (const device of devices) {
+    const rejected = [...server.rejectionsOf(device.client.clientId).keys()];
+    expect(rejected.filter((id) => !reported.get(device)?.has(id))).toEqual([]);
+  }
   expect(invariantViolations(server.snapshot(), propertyOfSpace)).toEqual([]);
-  return { server, devices };
+  return { server, devices, reported };
 }
 
 /**

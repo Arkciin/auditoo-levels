@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { applyPull, emptySnapshot } from "./snapshot";
+import { describe, expect, it, vi } from "vitest";
+import { MutationRejectedError } from "./mutators";
+import type { Mutation } from "./protocol";
+import { applyMutations, applyPull, emptySnapshot } from "./snapshot";
 
 const property = {
   id: "0199f0a0-0000-7000-8000-000000000001",
@@ -7,6 +9,28 @@ const property = {
   createdAt: 1,
   deletedAt: null,
 };
+
+describe("applyMutations", () => {
+  it("reports a refused mutation with the state it was refused on, and goes on", async () => {
+    const level = "0199f0a0-0000-7000-8000-000000000011";
+    const mutations: Mutation[] = [
+      { id: 1, timestamp: 1, name: "createProperty", args: { id: property.id, name: "Maison" } },
+      { id: 2, timestamp: 1, name: "renameLevel", args: { id: level, name: "R+1" } },
+      { id: 3, timestamp: 1, name: "renameProperty", args: { id: property.id, name: "Villa" } },
+    ];
+    const onRejected = vi.fn();
+
+    const after = await applyMutations(emptySnapshot, mutations, onRejected);
+
+    expect(after.properties.get(property.id)?.name).toBe("Villa");
+    expect(onRejected).toHaveBeenCalledOnce();
+    const [mutation, error, before] = onRejected.mock.lastCall ?? [];
+    expect(mutation).toBe(mutations[1]);
+    expect(error).toBeInstanceOf(MutationRejectedError);
+    // The state just before it: the first mutation applied, not the third.
+    expect(before.properties.get(property.id)?.name).toBe("Maison");
+  });
+});
 
 describe("applyPull", () => {
   it("merges changed rows and keeps untouched collections by reference", () => {

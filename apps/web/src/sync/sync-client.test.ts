@@ -4,7 +4,7 @@ import { wrap } from "idb";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { describeMutationError } from "./describe";
 import { DEFAULT_DATABASE_NAME, openSyncStorage, StorageClosedError } from "./storage";
-import { retryDelay, type SyncClient } from "./sync-client";
+import { MAX_RECENT_REJECTIONS, type Rejection, retryDelay, type SyncClient } from "./sync-client";
 import {
   closeLikeTheBrowser,
   type DeviceOptions,
@@ -45,6 +45,11 @@ async function createClient(options: TestClientOptions): Promise<SyncClient> {
   const client = await openTestClient(options);
   cleanups.push(() => client.dispose());
   return client;
+}
+
+/** Writes expectations with plain spaces; French typography wants U+00A0 inside « » and before :. */
+function french(text: string): string {
+  return text.replaceAll("« ", "«\u00a0").replaceAll(" »", "\u00a0»").replaceAll(" :", "\u00a0:");
 }
 
 describe("SyncClient", () => {
@@ -505,6 +510,174 @@ describe("SyncClient", () => {
       expect(server.rejected).toEqual([]);
       expect(rowsOf(tabB.getState().view)).toEqual(rowsOf(server.snapshot()));
     });
+  });
+});
+
+describe("changes that do not apply", () => {
+  it("reports a change the server rejects, once, as it leaves the view", async () => {
+    const server = new MemoryServer();
+    server.rejectWhen = (mutation) =>
+      mutation.name === "createProperty" &&
+      mutation.args.name === "Refusé" &&
+      "refused_by_database";
+    const { client } = await createDevice(server, { now: () => 42_000 });
+    const heard: Array<{ rejection: Rejection; stillShown: boolean; listed: boolean }> = [];
+    client.onRejected((rejection) => {
+      const state = client.getState();
+      const listed = state.rejections[0] === rejection;
+      heard.push({ rejection, stillShown: state.view.properties.has(P2), listed });
+    });
+    await client.mutate("createProperty", { id: P1, name: "Accepté" });
+    await client.mutate("createProperty", { id: P2, name: "Refusé" });
+
+    await client.syncNow();
+    await client.syncNow(); // Nothing new: not reported again.
+
+    const rejection: Rejection = {
+      mutationId: 2,
+      reason: "refused_by_database",
+      message: french(
+        "Le logement « Refusé » n'a pas pu être créé : le serveur a refusé de l'enregistrer.",
+      ),
+      at: 42_000,
+    };
+    expect(heard).toEqual([{ rejection, stillShown: false, listed: true }]);
+    expect(client.getState().rejections).toEqual([rejection]);
+    expect(client.getState().view.properties.has(P1)).toBe(true);
+  });
+
+  it("still reports a rejection whose push lost its response", async () => {
+    const server = new MemoryServer();
+    server.rejectWhen = (mutation) => mutation.name === "renameProperty";
+    const { client, transport } = await createDevice(server);
+    await client.mutate("createProperty", { id: P1, name: "Maison" });
+    await client.syncNow();
+    const listener = vi.fn();
+    client.onRejected(listener);
+
+    await client.mutate("renameProperty", { id: P1, name: "Villa" });
+    transport.mode = "lossy"; // The server processes the push; its answer never comes back.
+    await client.syncNow();
+    expect(server.rejected).toHaveLength(1);
+    expect(listener).not.toHaveBeenCalled();
+
+    transport.mode = "online";
+    await client.syncNow(); // The retry finds the rename already processed, and rejected.
+
+    expect(listener).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ mutationId: 2, reason: "not_applicable" }),
+    );
+    expect(client.getState().view.properties.get(P1)?.name).toBe("Maison");
+  });
+
+  it("explains a room refused because the server refused its level", async () => {
+    const server = new MemoryServer();
+    server.rejectWhen = (mutation) => mutation.name === "createLevel" && "invalid";
+    const { client } = await createDevice(server);
+    await client.mutate("createProperty", { id: P1, name: "Maison" });
+    await client.mutate("createLevel", { id: L1, propertyId: P1, name: "R+1", position: "a0" });
+    await client.mutate("createSpace", { id: S1, levelId: L1, name: "Chambre 1", position: "a0" });
+
+    await client.syncNow();
+
+    expect(client.getState().rejections.map((rejection) => rejection.message)).toEqual([
+      french("La pièce « Chambre 1 » n'a pas pu être ajoutée : le niveau n'existe plus."),
+      french(
+        "Le niveau « R+1 » n'a pas pu être ajouté : le serveur a jugé la modification invalide.",
+      ),
+    ]);
+  });
+
+  it("reports a queued change that no longer applies to newer server data, once", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {}); // Starting over is logged.
+    const server = new MemoryServer();
+    const { client, transport } = await createDevice(server);
+    await client.mutate("createProperty", { id: P1, name: "Maison" });
+    await client.mutate("createLevel", { id: L1, propertyId: P1, name: "RDC", position: "a0" });
+    await client.syncNow();
+    const listener = vi.fn();
+    client.onRejected(listener);
+
+    // Offline, a room goes into the level, while the server's database is replaced.
+    transport.mode = "offline";
+    await client.mutate("createSpace", { id: S1, levelId: L1, name: "Cuisine", position: "a0" });
+    server.wipe();
+    transport.mode = "online";
+    await client.syncNow(); // Starts over from the new database: no level, so no room.
+
+    expect(client.getState().view.spaces.has(S1)).toBe(false);
+    // Once, although the new database then rejected it too.
+    expect(server.rejectionsOf(client.clientId)).toEqual(new Map([[3, "not_applicable"]]));
+    expect(listener).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        mutationId: 3,
+        reason: "not_applicable",
+        message: french("La pièce « Cuisine » n'a pas pu être ajoutée : le niveau n'existe plus."),
+      }),
+    );
+  });
+
+  it("lists queued changes that no longer apply when the app starts, without announcing them", async () => {
+    const server = new MemoryServer();
+    const indexedDB = new IDBFactory();
+    const storage = await openSyncStorage({ indexedDB });
+    const args = { id: S1, levelId: L1, name: "Cuisine", position: "a0" };
+    await storage.enqueue({ name: "createSpace", args, timestamp: 1 });
+    storage.close();
+
+    const client = await createClient({ indexedDB, transport: new MemoryTransport(server) });
+    const listener = vi.fn();
+    client.onRejected(listener);
+    await client.syncNow(); // The server rejects it as well: old news.
+
+    expect(client.getState().rejections).toEqual([
+      expect.objectContaining({
+        mutationId: 1,
+        message: french("La pièce « Cuisine » n'a pas pu être ajoutée : le niveau n'existe plus."),
+      }),
+    ]);
+    expect(server.rejected).toHaveLength(1);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it(`keeps the latest ${MAX_RECENT_REJECTIONS} rejections, newest first`, async () => {
+    const server = new MemoryServer();
+    server.rejectWhen = (mutation) => mutation.name === "renameProperty";
+    const { client } = await createDevice(server);
+    await client.mutate("createProperty", { id: P1, name: "Maison" });
+    for (let n = 1; n <= MAX_RECENT_REJECTIONS + 5; n++) {
+      await client.mutate("renameProperty", { id: P1, name: `Nom ${n}` });
+    }
+
+    await client.syncNow();
+
+    const { rejections } = client.getState();
+    expect(rejections).toHaveLength(MAX_RECENT_REJECTIONS);
+    expect(rejections[0]?.message).toContain(french(`en « Nom ${MAX_RECENT_REJECTIONS + 5} »`));
+    expect(rejections.at(-1)?.message).toContain(french("en « Nom 6 »"));
+  });
+
+  it("tells the other tabs, which cannot see a rejection in the storage", async () => {
+    const server = new MemoryServer();
+    server.rejectWhen = (mutation) => mutation.name === "renameProperty";
+    const indexedDB = new IDBFactory();
+    const transport = new MemoryTransport(server);
+    const channelName = `releve-sync-test-${crypto.randomUUID()}`;
+    const tabA = await createClient({ indexedDB, transport, channelName });
+    const tabB = await createClient({ indexedDB, transport, channelName });
+    const heardInB = vi.fn();
+    tabB.onRejected(heardInB);
+    await tabA.mutate("createProperty", { id: P1, name: "Maison" });
+    await tabA.mutate("renameProperty", { id: P1, name: "Villa" });
+
+    await tabA.syncNow();
+
+    const state = await waitForState(
+      tabB,
+      (s) => s.rejections.length > 0 && s.pending.length === 0,
+    );
+    expect(state.rejections).toEqual(tabA.getState().rejections);
+    expect(heardInB).toHaveBeenCalledOnce();
   });
 });
 

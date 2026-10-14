@@ -34,11 +34,15 @@ interface NameLookup {
  * applies to (falls back to a generic noun for entities it does not contain).
  */
 export function describeMutation(mutation: Mutation, before: Snapshot): string {
-  return describe(mutation, {
-    property: (id) => before.properties.get(id)?.name,
-    level: (id) => before.levels.get(id)?.name,
-    space: (id) => before.spaces.get(id),
-  });
+  return describe(mutation, namesIn(before));
+}
+
+function namesIn(snapshot: Snapshot): NameLookup {
+  return {
+    property: (id) => snapshot.properties.get(id)?.name,
+    level: (id) => snapshot.levels.get(id)?.name,
+    space: (id) => snapshot.spaces.get(id),
+  };
 }
 
 const pendingCache = new WeakMap<
@@ -174,6 +178,151 @@ function isZodError(
     "issues" in error &&
     Array.isArray(error.issues)
   );
+}
+
+/**
+ * Tells the user that one of their changes did not apply, and why, e.g. « La pièce « Cuisine »
+ * n'a pas pu être déplacée vers « R+1 » : le niveau n'existe plus. ».
+ *
+ * @param before the state just before the mutation, for names (a rename shows the former name)
+ * @param reason the server's code (`RejectionReason`, or one this version does not know);
+ *   `not_applicable` for a change the device itself found no longer applies
+ * @param against the state the mutation was refused on, as far as the device knows: tells which
+ *   entity was missing
+ */
+export function describeRejection(
+  mutation: Mutation,
+  before: Snapshot,
+  reason: string,
+  against: Snapshot = before,
+): string {
+  return `${notDone(mutation, namesIn(before))}\u00a0: ${why(mutation, reason, against)}.`;
+}
+
+const THE: Readonly<Record<EntityKind, string>> = {
+  property: "Le logement",
+  level: "Le niveau",
+  space: "La pièce",
+};
+
+/** « La pièce « Cuisine » n'a pas pu être déplacée vers « R+1 » ». */
+function notDone(mutation: Mutation, names: NameLookup): string {
+  const fail = (kind: EntityKind, name: string | undefined, participle: string) =>
+    `${name === undefined ? THE[kind] : `${THE[kind]} ${quote(name)}`} n'a pas pu être ${participle}`;
+  switch (mutation.name) {
+    case "createProperty":
+      return fail("property", mutation.args.name, "créé");
+    case "renameProperty":
+      return fail(
+        "property",
+        names.property(mutation.args.id),
+        `renommé en ${quote(mutation.args.name)}`,
+      );
+    case "deleteProperty":
+      return fail("property", names.property(mutation.args.id), "supprimé");
+    case "restoreProperty":
+      return fail("property", names.property(mutation.args.id), "restauré");
+
+    case "createLevel":
+      return fail("level", mutation.args.name, "ajouté");
+    case "renameLevel":
+      return fail(
+        "level",
+        names.level(mutation.args.id),
+        `renommé en ${quote(mutation.args.name)}`,
+      );
+    case "moveLevel":
+      return fail("level", names.level(mutation.args.id), "déplacé");
+    case "deleteLevel":
+      return fail("level", names.level(mutation.args.id), "supprimé");
+    case "restoreLevel":
+      return fail("level", names.level(mutation.args.id), "restauré");
+
+    case "createSpace":
+      return fail("space", mutation.args.name, "ajoutée");
+    case "renameSpace":
+      return fail(
+        "space",
+        names.space(mutation.args.id)?.name,
+        `renommée en ${quote(mutation.args.name)}`,
+      );
+    case "moveSpace": {
+      const space = names.space(mutation.args.id);
+      if (!space || space.levelId === mutation.args.levelId) {
+        return fail("space", space?.name, "déplacée");
+      }
+      const level = names.level(mutation.args.levelId);
+      const target = level === undefined ? "un autre niveau" : quote(level);
+      return fail("space", space.name, `déplacée vers ${target}`);
+    }
+    case "deleteSpace":
+      return fail("space", names.space(mutation.args.id)?.name, "supprimée");
+    case "restoreSpace":
+      return fail("space", names.space(mutation.args.id)?.name, "restaurée");
+  }
+}
+
+function why(mutation: Mutation, reason: string, against: Snapshot): string {
+  switch (reason) {
+    case "not_applicable":
+      return missingEntity(mutation, against) ?? "les données ont changé entre-temps";
+    case "invalid":
+      return "le serveur a jugé la modification invalide";
+    case "refused_by_database":
+      return "le serveur a refusé de l'enregistrer";
+    default:
+      // A code from a newer server: what matters is that it said no.
+      return "le serveur a refusé la modification";
+  }
+}
+
+/**
+ * What `mutation` needs that `state` lacks, in French, following the checks of its mutator
+ * (`packages/shared/src/mutators.ts`); undefined when nothing is missing.
+ */
+function missingEntity(mutation: Mutation, state: Snapshot): string | undefined {
+  const property = (id: string) =>
+    state.properties.has(id) ? undefined : "le logement n'existe plus";
+  const level = (id: string) => {
+    const found = state.levels.get(id);
+    return found ? property(found.propertyId) : "le niveau n'existe plus";
+  };
+  switch (mutation.name) {
+    case "createProperty":
+    case "deleteProperty":
+    case "deleteLevel":
+    case "deleteSpace":
+      return undefined; // Their mutators never refuse.
+    case "renameProperty":
+    case "restoreProperty":
+      return state.properties.has(mutation.args.id) ? undefined : "il n'existe plus";
+    case "createLevel":
+      return property(mutation.args.propertyId);
+    case "renameLevel":
+    case "moveLevel":
+    case "restoreLevel": {
+      const found = state.levels.get(mutation.args.id);
+      return found ? property(found.propertyId) : "il n'existe plus";
+    }
+    case "createSpace":
+      return level(mutation.args.levelId);
+    case "renameSpace":
+    case "restoreSpace": {
+      const space = state.spaces.get(mutation.args.id);
+      return space ? level(space.levelId) : "elle n'existe plus";
+    }
+    case "moveSpace": {
+      const space = state.spaces.get(mutation.args.id);
+      if (!space) return "elle n'existe plus";
+      const target = state.levels.get(mutation.args.levelId);
+      if (!target) return "le niveau n'existe plus";
+      const source = state.levels.get(space.levelId);
+      if (source && source.propertyId !== target.propertyId) {
+        return "une pièce ne peut pas changer de logement";
+      }
+      return property(target.propertyId);
+    }
+  }
 }
 
 /** « Pièce « Cuisine » », or just « Pièce » when the name is unknown. */

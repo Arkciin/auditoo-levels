@@ -19,7 +19,9 @@
  *   serialized, so none of them can interleave with another and lose or double-apply a mutation;
  * - one push/pull cycle at a time per device, across tabs (Web Locks);
  * - when the server's database is replaced (another epoch), the device starts over from the new
- *   database's data and pushes its pending mutations again, none of them skipped.
+ *   database's data and pushes its pending mutations again, none of them skipped;
+ * - no change disappears without a word: one the server rejects, or that no longer applies to
+ *   newer server data, is reported (`rejections`, `onRejected`) once it leaves the view.
  */
 import {
   applyMutation,
@@ -31,9 +33,11 @@ import {
   type MutationName,
   mutationArgsSchemas,
   type PullResponse,
+  type PushResponse,
   type Snapshot,
   SnapshotTx,
 } from "@repo/shared";
+import { describeRejection } from "./describe";
 import {
   type MutationDraft,
   StorageClosedError,
@@ -67,6 +71,24 @@ export interface SyncStatus {
 }
 
 /**
+ * A change made on this device that did not apply: the server rejected it, or it no longer
+ * applies to newer server data (its entity was lost with a replaced database, say).
+ */
+export interface Rejection {
+  /** The mutation's id in the outbox. */
+  readonly mutationId: number;
+  /**
+   * The server's code (`RejectionReason`, or a newer one this version does not know), or
+   * `not_applicable` when the device found out itself, replaying its queue.
+   */
+  readonly reason: string;
+  /** What was not done, and why, for the user (French), from `describeRejection`. */
+  readonly message: string;
+  /** When the change left the view (epoch ms). */
+  readonly at: number;
+}
+
+/**
  * Everything the UI renders. Immutable: a new object replaces it on every change, and each field
  * keeps its identity when it did not change.
  */
@@ -78,6 +100,11 @@ export interface SyncState {
   /** Local mutations not confirmed by the server yet, oldest first. */
   readonly pending: readonly Mutation[];
   readonly status: SyncStatus;
+  /**
+   * The latest changes that did not apply, newest first, at most {@link MAX_RECENT_REJECTIONS}.
+   * Kept in memory only: a restart forgets them.
+   */
+  readonly rejections: readonly Rejection[];
 }
 
 /** Options of {@link SyncClient.create}. */
@@ -116,6 +143,11 @@ export interface SyncClientOptions {
 /** Default name of the cross-tab BroadcastChannel and Web Lock. */
 export const DEFAULT_CHANNEL_NAME = "releve-sync";
 
+/** Length of `SyncState.rejections`. */
+export const MAX_RECENT_REJECTIONS = 20;
+/** Mutation ids remembered as reported, so that none is reported twice (rejections are rare). */
+const MAX_REPORTED_IDS = 1_000;
+
 const DEFAULT_PULL_INTERVAL_MS = 30_000;
 const RETRY_INITIAL_DELAY_MS = 1_000;
 const RETRY_MAX_DELAY_MS = 30_000;
@@ -140,6 +172,18 @@ interface SyncWaiter {
   readonly resolve: () => void;
 }
 
+/** A pending mutation a replay found no longer applying, with the state it was refused on. */
+interface Refusal {
+  readonly mutation: Mutation;
+  readonly against: Snapshot;
+}
+
+/**
+ * What tabs tell each other: `"changed"` (reload the storage, the single source of truth), or
+ * rejections one of them reported, which the others could not tell from the storage alone.
+ */
+type TabMessage = "changed" | { readonly type: "rejected"; readonly rejections: Rejection[] };
+
 /**
  * Offline-first store of the dataset, synced with the server in the background.
  *
@@ -163,6 +207,7 @@ export class SyncClient {
   private readonly channel: BroadcastChannel | undefined;
   private readonly abortController = new AbortController();
   private readonly listeners = new Set<() => void>();
+  private readonly rejectionListeners = new Set<(rejection: Rejection) => void>();
 
   private state: SyncState;
   /** Server version `state.base` is up to date with. */
@@ -176,6 +221,14 @@ export class SyncClient {
   private lastAckedId = 0;
   /** `lastMutationId` of the last applied pull, to tell no-op pulls apart. */
   private lastPulledMutationId = 0;
+
+  /**
+   * Rejections pushes reported, by mutation id, held until their mutation leaves the queue (at the
+   * pull that confirms it): the user then hears of a change as it disappears from the screen.
+   */
+  private readonly rejectedByServer = new Map<number, Omit<Rejection, "mutationId" | "at">>();
+  /** Ids of the mutations already reported as rejected (oldest first, bounded). */
+  private readonly reported = new Set<number>();
 
   // Inputs of `status`, which `publish()` derives from them.
   private phase: SyncStatus["phase"] = "idle";
@@ -211,7 +264,12 @@ export class SyncClient {
    */
   static async create(options: SyncClientOptions): Promise<SyncClient> {
     const stored = await options.storage.loadState();
-    return new SyncClient(options, stored, await replay(stored.base, stored.pending));
+    const { view, refused } = await replay(stored.base, stored.pending);
+    const client = new SyncClient(options, stored, view);
+    // Queued changes that no longer apply (reported in an earlier session, most likely): listed
+    // in the state, but nobody listens to `onRejected` yet, so no toast for old news.
+    await client.reportRefusals(refused, stored);
+    return client;
   }
 
   private constructor(options: SyncClientOptions, stored: StoredState, view: Snapshot) {
@@ -231,6 +289,7 @@ export class SyncClient {
       view,
       pending: stored.pending,
       status: this.computeStatus(stored.pending.length, undefined),
+      rejections: [],
     };
     if (this.channelName !== null && typeof BroadcastChannel !== "undefined") {
       this.channel = new BroadcastChannel(this.channelName);
@@ -246,6 +305,18 @@ export class SyncClient {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
+    };
+  };
+
+  /**
+   * Calls `listener` with each change of this device found not to apply from now on (the server
+   * rejected it, or it no longer applies to newer server data), once, as it leaves the view and
+   * after the state listing it is published. Returns the function that unsubscribes it.
+   */
+  readonly onRejected = (listener: (rejection: Rejection) => void): (() => void) => {
+    this.rejectionListeners.add(listener);
+    return () => {
+      this.rejectionListeners.delete(listener);
     };
   };
 
@@ -440,10 +511,42 @@ export class SyncClient {
       // that it notices if another one answers later. (One that synced before epochs existed must
       // not: its data may come from yet another database, and its pull will start over anyway.)
       if (this.epoch === null && this.cursor === 0) this.epoch = response.epoch;
+      await this.holdServerRejections(mutations, response.rejected);
       // No progress means the server knows better: stop and let the pull reconcile rather than
       // loop forever.
       if (response.lastMutationId <= this.lastAckedId) return;
       this.lastAckedId = response.lastMutationId;
+    }
+  }
+
+  /**
+   * Words the rejections a push reported, now, while the queue still holds their mutations (for
+   * names as the user saw them). They are announced once the mutations leave the queue.
+   */
+  private async holdServerRejections(
+    batch: readonly Mutation[],
+    rejected: PushResponse["rejected"],
+  ): Promise<void> {
+    if (rejected.length === 0) return;
+    const reasons = new Map(rejected.map(({ id, reason }) => [id, reason]));
+    const refusedByServer = (id: number) =>
+      reasons.has(id) || this.rejectedByServer.has(id) || this.reported.has(id);
+    const { base, pending } = this.state;
+    for (const mutation of batch) {
+      const reason = reasons.get(mutation.id);
+      if (reason === undefined) continue;
+      // Already known: reported, or held since an earlier attempt (this push is a retry).
+      if (this.reported.has(mutation.id) || this.rejectedByServer.has(mutation.id)) continue;
+      const earlier = pending.filter((other) => other.id < mutation.id);
+      const before = await applyMutations(base, earlier);
+      // What the server held when it refused it, as far as this device knows: the confirmed state
+      // and the earlier changes it accepted (a room fails when the level it goes in was refused).
+      const against = await applyMutations(
+        base,
+        earlier.filter((other) => !refusedByServer(other.id)),
+      );
+      const message = describeRejection(mutation, before, reason, against);
+      this.rejectedByServer.set(mutation.id, { reason, message });
     }
   }
 
@@ -461,6 +564,8 @@ export class SyncClient {
       // from its full state. The outbox stays, to be pushed again from its first mutation.
       console.warn("The server's database was replaced: resyncing from scratch");
       this.lastAckedId = 0;
+      // The previous database's verdicts too: the new one judges the mutations again.
+      this.rejectedByServer.clear();
       const full = await this.transport.pull({ ...request, cursor: 0 }, { signal });
       response = { ...full, reset: true };
     }
@@ -470,15 +575,19 @@ export class SyncClient {
 
   private async applyPullResponse(response: PullResponse): Promise<void> {
     if (this.disposed) return;
-    const { base, view, pending } = this.state;
+    const previous = this.state;
+    const { base, view, pending } = previous;
     const rowsChanged = response.reset || hasRows(response.changes);
     const nextBase = rowsChanged ? applyPull(base, response) : base;
     // Mutations the server state already includes leave the queue, accepted or rejected alike.
     const unconfirmed = pending.filter((mutation) => mutation.id > response.lastMutationId);
     // Keep identities when nothing changed: periodic pulls must not re-render the UI.
     const nextPending = unconfirmed.length === pending.length ? pending : unconfirmed;
-    const nextView =
-      nextBase === base && nextPending === pending ? view : await replay(nextBase, nextPending);
+    const replayed =
+      nextBase === base && nextPending === pending
+        ? undefined
+        : await replay(nextBase, nextPending);
+    const nextView = replayed?.view ?? view;
     const storageChanged =
       rowsChanged ||
       response.epoch !== this.epoch ||
@@ -493,6 +602,8 @@ export class SyncClient {
     this.lastPulledMutationId = response.lastMutationId;
     this.publish({ base: nextBase, view: nextView, pending: nextPending });
     if (storageChanged) this.notifyOtherTabs();
+    this.reportSettledRejections();
+    if (replayed) await this.reportRefusals(replayed.refused, previous);
   }
 
   private recordFailure(error: unknown): void {
@@ -556,21 +667,25 @@ export class SyncClient {
   }
 
   /** Replaces the state if anything changed (status included) and notifies the listeners. */
-  private publish(changes: Partial<Pick<SyncState, "base" | "view" | "pending">> = {}): void {
+  private publish(
+    changes: Partial<Pick<SyncState, "base" | "view" | "pending" | "rejections">> = {},
+  ): void {
     const previous = this.state;
     const base = changes.base ?? previous.base;
     const view = changes.view ?? previous.view;
     const pending = changes.pending ?? previous.pending;
+    const rejections = changes.rejections ?? previous.rejections;
     const status = this.computeStatus(pending.length, previous.status);
     if (
       base === previous.base &&
       view === previous.view &&
       pending === previous.pending &&
-      status === previous.status
+      status === previous.status &&
+      rejections === previous.rejections
     ) {
       return;
     }
-    this.state = { base, view, pending, status };
+    this.state = { base, view, pending, status, rejections };
     for (const listener of this.listeners) {
       try {
         listener();
@@ -592,28 +707,120 @@ export class SyncClient {
     return previous && sameStatus(previous, next) ? previous : next;
   }
 
+  // --- Rejections ------------------------------------------------------------------------------
+
+  /** Reports the rejections held for mutations that have left the queue. */
+  private reportSettledRejections(): void {
+    if (this.rejectedByServer.size === 0) return;
+    const queued = new Set(this.state.pending.map((mutation) => mutation.id));
+    const at = this.now();
+    const settled: Rejection[] = [];
+    for (const [mutationId, rejection] of this.rejectedByServer) {
+      if (queued.has(mutationId)) continue;
+      this.rejectedByServer.delete(mutationId);
+      if (this.claim(mutationId)) settled.push({ mutationId, ...rejection, at });
+    }
+    this.report(settled);
+  }
+
+  /**
+   * Reports the pending mutations a replay found no longer applying: their effect just left the
+   * view. They are named as in `previous`, the state in which they still applied.
+   */
+  private async reportRefusals(
+    refused: readonly Refusal[],
+    previous: Pick<SyncState, "base" | "pending">,
+  ): Promise<void> {
+    const fresh = refused.filter(({ mutation }) => this.claim(mutation.id));
+    if (fresh.length === 0) return;
+    const at = this.now();
+    const rejections: Rejection[] = [];
+    for (const { mutation, against } of fresh) {
+      const earlier = previous.pending.filter((other) => other.id < mutation.id);
+      const before = await applyMutations(previous.base, earlier);
+      const message = describeRejection(mutation, before, "not_applicable", against);
+      rejections.push({ mutationId: mutation.id, reason: "not_applicable", message, at });
+    }
+    this.report(rejections);
+  }
+
+  /** Marks a mutation as reported; false if it already was. */
+  private claim(mutationId: number): boolean {
+    if (this.reported.has(mutationId)) return false;
+    this.reported.add(mutationId);
+    if (this.reported.size > MAX_REPORTED_IDS) {
+      const [oldest] = this.reported;
+      if (oldest !== undefined) this.reported.delete(oldest);
+    }
+    return true;
+  }
+
+  /**
+   * Lists newly claimed rejections in the state, then tells the `onRejected` listeners and the
+   * other tabs (which cannot tell a rejection from the storage, where it only leaves the outbox).
+   */
+  private report(rejections: readonly Rejection[], { fromOtherTab = false } = {}): void {
+    if (rejections.length === 0 || this.disposed) return;
+    const newestFirst = rejections.toSorted((a, b) => b.at - a.at || b.mutationId - a.mutationId);
+    this.publish({
+      rejections: [...newestFirst, ...this.state.rejections].slice(0, MAX_RECENT_REJECTIONS),
+    });
+    for (const rejection of rejections) {
+      for (const listener of this.rejectionListeners) {
+        try {
+          listener(rejection);
+        } catch (error) {
+          console.error("SyncClient rejection listener failed", error);
+        }
+      }
+    }
+    if (!fromOtherTab) {
+      this.channel?.postMessage({
+        type: "rejected",
+        rejections: [...rejections],
+      } satisfies TabMessage);
+    }
+  }
+
   // --- Other tabs ------------------------------------------------------------------------------
 
   private notifyOtherTabs(): void {
     // No payload: receivers re-read the storage, the single source of truth.
-    this.channel?.postMessage("changed");
+    this.channel?.postMessage("changed" satisfies TabMessage);
   }
 
-  /** Another tab wrote to the shared storage: reload it (bursts of messages coalesce). */
-  private readonly handleTabMessage = (): void => {
-    if (this.reloadScheduled || this.disposed) return;
+  /**
+   * Another tab reported rejections, or wrote to the shared storage: reload it then (bursts of
+   * messages coalesce).
+   */
+  private readonly handleTabMessage = (event: MessageEvent<unknown>): void => {
+    if (this.disposed) return;
+    const rejections = rejectionsIn(event.data);
+    if (rejections) {
+      const fresh = rejections.filter((rejection) => this.claim(rejection.mutationId));
+      this.report(fresh, { fromOtherTab: true });
+      return;
+    }
+    if (this.reloadScheduled) return;
     this.reloadScheduled = true;
     this.transition(async () => {
       // Reset before reading: a message arriving during the read must schedule another one.
       this.reloadScheduled = false;
       if (this.disposed) return;
+      const previous = this.state;
       const stored = await this.storage.loadState();
-      const view = await replay(stored.base, stored.pending);
-      // Another tab started over from a new database: what we know was acknowledged no longer is.
-      if (stored.epoch !== this.epoch) this.lastAckedId = 0;
+      const { view, refused } = await replay(stored.base, stored.pending);
+      // Another tab started over from a new database: what we know was acknowledged no longer is,
+      // and the previous database's verdicts no longer stand.
+      if (stored.epoch !== this.epoch) {
+        this.lastAckedId = 0;
+        this.rejectedByServer.clear();
+      }
       this.epoch = stored.epoch;
       this.cursor = stored.cursor;
       this.publish({ base: stored.base, view, pending: stored.pending });
+      this.reportSettledRejections();
+      await this.reportRefusals(refused, previous);
     }).catch((error: unknown) => {
       console.error("Could not reload the state written by another tab", error);
     });
@@ -687,13 +894,48 @@ async function dryRun(view: Snapshot, draft: MutationDraft): Promise<Snapshot> {
   return tx.commit();
 }
 
-/** The rebase: replays pending mutations on top of a server snapshot. */
-function replay(base: Snapshot, pending: readonly Mutation[]): Promise<Snapshot> {
-  return applyMutations(base, pending, (mutation, error) => {
-    // It stays in the outbox: the server is authoritative and will settle it, after which the
-    // next pull drops it like any processed mutation.
-    console.warn(`Pending mutation ${mutation.id} (${mutation.name}) no longer applies`, error);
+/** The rebase: replays pending mutations on top of a server snapshot, noting those refused. */
+async function replay(
+  base: Snapshot,
+  pending: readonly Mutation[],
+): Promise<{ view: Snapshot; refused: Refusal[] }> {
+  const refused: Refusal[] = [];
+  // A refused mutation stays in the outbox: the server is authoritative and will settle it, after
+  // which the next pull drops it like any processed mutation.
+  const view = await applyMutations(base, pending, (mutation, _error, against) => {
+    refused.push({ mutation, against });
   });
+  return { view, refused };
+}
+
+/** The rejections another tab reported, if `data` is such a message (checked field by field). */
+function rejectionsIn(data: unknown): Rejection[] | undefined {
+  if (
+    typeof data !== "object" ||
+    data === null ||
+    !("type" in data) ||
+    data.type !== "rejected" ||
+    !("rejections" in data) ||
+    !Array.isArray(data.rejections)
+  ) {
+    return undefined;
+  }
+  return data.rejections.filter(isRejection);
+}
+
+function isRejection(value: unknown): value is Rejection {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "mutationId" in value &&
+    Number.isInteger(value.mutationId) &&
+    "reason" in value &&
+    typeof value.reason === "string" &&
+    "message" in value &&
+    typeof value.message === "string" &&
+    "at" in value &&
+    typeof value.at === "number"
+  );
 }
 
 function hasRows(changes: PullResponse["changes"]): boolean {
