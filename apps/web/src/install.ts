@@ -73,8 +73,14 @@ export async function promptInstall(): Promise<boolean> {
   // An event prompts once: the menu item goes, whatever the answer.
   deferredPrompt = null;
   notify();
-  await event.prompt();
-  return (await event.userChoice).outcome === "accepted";
+  try {
+    await event.prompt();
+    return (await event.userChoice).outcome === "accepted";
+  } catch (error) {
+    // Refused by the browser (no user gesture to answer, say): the browser's own menu remains.
+    console.warn("The install prompt could not open", error);
+    return false;
+  }
 }
 
 const STANDALONE = "(display-mode: standalone)";

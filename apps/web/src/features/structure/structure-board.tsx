@@ -103,7 +103,7 @@ export function StructureBoard({
   const movedToNewContainer = useRef(false);
   // One « Déplacer vers… » sheet for every room; the room stays set while the sheet closes.
   const [move, setMove] = useState<{ space: Space; open: boolean } | null>(null);
-  const moveSpace = useCallback((space: Space) => setMove({ space, open: true }), []);
+  const openMoveSheet = useCallback((space: Space) => setMove({ space, open: true }), []);
 
   const levels = useMemo(() => structure.map((group) => group.level), [structure]);
   const levelIds = useMemo(() => levels.map((level) => level.id), [levels]);
@@ -273,7 +273,7 @@ export function StructureBoard({
                 spacesById={spacesById}
                 autoAdd={autoAddLevelId === level.id}
                 onAutoAddHandled={onAutoAddHandled}
-                onMoveSpace={levels.length > 1 ? moveSpace : undefined}
+                onMoveSpace={levels.length > 1 ? openMoveSheet : undefined}
               />
             ))}
           </div>

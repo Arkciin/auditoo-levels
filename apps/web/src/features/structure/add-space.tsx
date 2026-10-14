@@ -49,6 +49,7 @@ export function AddSpace({
     viewport.addEventListener("resize", keepEntryInSight);
     return () => viewport.removeEventListener("resize", keepEntryInSight);
   }, [typing, keepEntryInSight]);
+
   // Adds run one after the other so that each one sees the rooms added just before it.
   const queue = useRef<Promise<void>>(Promise.resolve());
   const suggestions = useMemo(
