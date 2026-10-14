@@ -3,9 +3,13 @@ import type { Page } from "@playwright/test";
 import {
   addLevel,
   createProperty,
+  dragAnnouncement,
   dragOnto,
+  expect,
   expectLevels,
   expectRooms,
+  expectSynced,
+  flick,
   levelHandle,
   nextFrames,
   reloadOnceSynced,
@@ -74,6 +78,68 @@ test("reorder rooms and levels with their drag handles", async ({ page }) => {
     await expectRooms(page, "Mezzanine", []);
     await expectRooms(page, "R+1", ["Chambre 1"]);
   });
+});
+
+test("with a finger, a row follows once its handle is held: within a level, to another level", async ({
+  page,
+}) => {
+  await createHouse(page);
+
+  await test.step("hold Cuisine's handle, then move it up within its level", async () => {
+    await savedOnServer(page, () =>
+      dragOnto(roomHandle(page, "Cuisine"), {
+        item: "Cuisine",
+        target: "Entrée",
+        direction: "up",
+        input: "touch",
+      }),
+    );
+    await expectRooms(page, "RDC", ["Cuisine", "Entrée", "Séjour"]);
+  });
+
+  await test.step("hold Bureau's handle, then move it to another level", async () => {
+    await savedOnServer(page, () =>
+      dragOnto(roomHandle(page, "Bureau"), {
+        item: "Bureau",
+        target: "Entrée",
+        direction: "up",
+        input: "touch",
+      }),
+    );
+    await expectRooms(page, "RDC", ["Cuisine", "Bureau", "Entrée", "Séjour"]);
+    await expectRooms(page, "R+1", ["Chambre 1"]);
+  });
+
+  await page.reload();
+  await expectRooms(page, "RDC", ["Cuisine", "Bureau", "Entrée", "Séjour"]);
+  await expectRooms(page, "R+1", ["Chambre 1"]);
+});
+
+test("a flick that starts on a drag handle scrolls the page and moves nothing", async ({
+  page,
+}) => {
+  // The example house is taller than the screen: four levels, fifteen rooms.
+  await page.goto("/");
+  await expectSynced(page);
+  await page.getByRole("button", { name: "Plus d’actions", exact: true }).tap();
+  await page.getByRole("menuitem", { name: "Ajouter un logement d’exemple", exact: true }).tap();
+  await expect(page).toHaveURL(/\/logements\/[\da-f-]{36}$/);
+  const basement = ["Cave", "Chaufferie", "Garage"];
+  const groundFloor = ["Entrée", "Séjour", "Cuisine", "WC", "Cellier"];
+  await expectRooms(page, "RDC", groundFloor);
+  await expectSynced(page);
+  const scrollY = () => page.evaluate(() => window.scrollY);
+  expect(await scrollY()).toBe(0);
+
+  // The thumb lands on the handles at the right edge as often as anywhere else.
+  await flick(roomHandle(page, "Séjour"), -150);
+
+  await expect.poll(scrollY).toBeGreaterThan(50);
+  await nextFrames(page, 5);
+  expect(await dragAnnouncement(page), "no drag started").toBe("");
+  await expectRooms(page, "Sous-sol", basement);
+  await expectRooms(page, "RDC", groundFloor);
+  await expectSynced(page);
 });
 
 // Steers by the finger (the test above steers by the announced drop target).

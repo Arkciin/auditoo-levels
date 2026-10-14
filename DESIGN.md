@@ -343,7 +343,7 @@ that the list stays strictly ordered with valid keys; 500 appends keep keys at 8
 | **French UI** | The users are French diagnosticians: trade vocabulary (logement, niveau, pièce, RDC, R+1, Combles), French typography (non-breaking spaces in « quotes » and "3 pièces"), French plural rules. Code stays in English. |
 | **Signature: the level datum marker ▽** | Borrowed from building section drawings: a half-filled inverted triangle whose apex rests on the floor line. Every level header is drawn as a floor line carrying it (`apps/web/src/components/datum-marker.tsx`). |
 | **Thumb zone** | The screen's main action ("Nouveau logement", "Ajouter un niveau") sits in a fixed bottom bar; toasts appear just above it; sheets slide up from the bottom. |
-| **One gesture per intent** | Tap a name to rename it in place, swipe a row left to delete it, drag only by the grip handle. They never compete: a swipe locks to the horizontal axis after 8 px and leaves vertical scroll native, a drag starts 4 px into a `touch-action: none` handle, and handles and inputs never start a swipe. |
+| **One gesture per intent** | Tap a name to rename it in place, swipe a row left to delete it, drag only by the grip handle. They never compete: a swipe locks to the horizontal axis after 8 px and leaves vertical scroll native, and handles and inputs never start a swipe. A mouse drags 4 px into a handle; a finger must first rest on it for 250 ms (the copy then lifts, with a vibration), because a thumb scrolling the page often starts on a handle: a flick from one scrolls (`touch-action: manipulation`). |
 | **Other ways than gestures** | A ⋮ menu on every logement, level and room: rename, delete, and for a room « Déplacer vers… », a sheet of the other levels (the room goes to the end of the one picked, with undo). Drag and drop works with the keyboard too (Space, arrows, Escape), announced in French to screen readers. |
 | **Menus open on a tap** | Radix opens a menu on pointerdown, so a finger starting a scroll on a ⋮ (one per room) opened it and blocked the scroll. Touch and pen open on the tap; mouse and keyboard are unchanged (`components/ui/dropdown-menu.tsx`). |
 | **Identical floors in one tap** | « Dupliquer le niveau » copies a level with its rooms: a floor becomes the next free floor in the source's spelling (R+1 → R+2, 1er étage → 2e étage), anything else « RDC (copie) »; bedrooms take the logement's next numbers, other rooms keep their names. |
@@ -431,7 +431,7 @@ budget and end-to-end tests on every push.
 | **Sequence-assigned versions** | Commit order differs from sequence order, so an incremental pull can skip rows (see [Gapless versions](#gapless-versions-a-row-lock-not-a-sequence)). |
 | **Caching `/api` in the service worker** | Two copies of the data with different freshness rules. IndexedDB is the only data cache. |
 | **`@dnd-kit/react` 0.x** | Pre-1.0. The stable `@dnd-kit/core` and `@dnd-kit/sortable` cover sortable lists across containers, keyboard included. |
-| **Long-press to drag** | Conflicts with scrolling and with swipe-to-delete. Dedicated handles keep every gesture unambiguous. |
+| **Long-press anywhere on a row to drag** | Conflicts with renaming, swipe-to-delete and scrolling. Only the handle drags, after a short hold for a finger, so that a flick starting on it still scrolls. |
 
 ## Known limitations and next steps
 

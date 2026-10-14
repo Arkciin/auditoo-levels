@@ -20,10 +20,11 @@ import {
   getFirstCollision,
   KeyboardSensor,
   MeasuringStrategy,
+  MouseSensor,
   type Over,
-  PointerSensor,
   pointerWithin,
   rectIntersection,
+  TouchSensor,
   type UniqueIdentifier,
   useSensor,
   useSensors,
@@ -71,6 +72,14 @@ import { MoveSpaceDrawer } from "./move-space-drawer";
 import { useDuplicateLevel } from "./use-duplicate-level";
 
 type Containers = Readonly<Record<string, readonly string[]>>;
+
+/**
+ * A finger must rest on a handle this long before its row follows: a thumb scrolling the page
+ * often starts on a handle (they line the right edge, under the thumb), and moves at once.
+ */
+const TOUCH_HOLD_MS = 250;
+/** How far a finger may drift during that hold (px); further, it is a scroll. */
+const TOUCH_HOLD_TOLERANCE_PX = 6;
 
 interface DragData {
   type: "level" | "space";
@@ -127,8 +136,13 @@ export function StructureBoard({
   });
 
   const sensors = useSensors(
-    // Handles have `touch-action: none`, so a few pixels are enough to tell a drag from a tap.
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    // A mouse never scrolls by dragging: a few pixels tell a drag from a click.
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    // A finger drags after a short hold, still; until then the browser may scroll the page, as
+    // handles leave it vertical panning (`touch-action: manipulation`).
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: TOUCH_HOLD_MS, tolerance: TOUCH_HOLD_TOLERANCE_PX },
+    }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
@@ -172,7 +186,8 @@ export function StructureBoard({
     if (!data) return;
     setActive({ id: String(dragged.id), type: data.type });
     if (data.type === "space") setDragContainers(committed);
-    haptic(8);
+    // With the lifted copy (DragPreview), what tells a finger that the hold is over.
+    haptic(10);
   }
 
   function handleDragOver({ active: dragged, over }: DragOverEvent) {
@@ -611,7 +626,10 @@ function SpaceRow({
   );
 }
 
-/** The only place a drag can start: keeps taps (rename) and swipes (delete) unambiguous. */
+/**
+ * The only place a drag can start: keeps taps (rename) and swipes (delete) unambiguous. A finger
+ * holds it still for a moment first (see the sensors): a flick that starts on it scrolls the page.
+ */
 function DragHandle({ label, className, ...props }: ComponentProps<"button"> & { label: string }) {
   return (
     <button
@@ -619,7 +637,7 @@ function DragHandle({ label, className, ...props }: ComponentProps<"button"> & {
       aria-label={label}
       data-no-swipe
       className={cn(
-        "flex size-11 shrink-0 cursor-grab touch-none items-center justify-center rounded-lg text-muted-foreground active:cursor-grabbing",
+        "flex size-11 shrink-0 cursor-grab touch-manipulation items-center justify-center rounded-lg text-muted-foreground select-none active:cursor-grabbing active:bg-muted",
         className,
       )}
       {...props}
@@ -628,6 +646,13 @@ function DragHandle({ label, className, ...props }: ComponentProps<"button"> & {
     </button>
   );
 }
+
+/**
+ * The copy in the hand rises off the page as the drag starts, slightly larger and shadowed: on a
+ * touch screen, the sign (with a vibration) that the hold is over and the row now follows.
+ * (`scale` and the entrance's `transform` multiply: it grows from its size on the page.)
+ */
+const LIFTED = "cursor-grabbing shadow-drag scale-102 animate-in zoom-in-98";
 
 function DragPreview({
   active,
@@ -644,7 +669,12 @@ function DragPreview({
     const level = levels.find((candidate) => candidate.id === active.id);
     if (!level) return null;
     return (
-      <div className="flex h-12 cursor-grabbing items-end gap-2 rounded-lg border-b-[1.5px] border-foreground bg-card pr-1 pl-4 shadow-drag">
+      <div
+        className={cn(
+          "flex h-12 items-end gap-2 rounded-lg border-b-[1.5px] border-foreground bg-card pr-1 pl-4",
+          LIFTED,
+        )}
+      >
         <DatumMarker className="mb-px" />
         <span className="flex-1 truncate pb-1.5 text-lg font-bold">{level.name}</span>
         <span className="pb-2 text-sm text-muted-foreground tabular-nums">
@@ -657,7 +687,7 @@ function DragPreview({
   const space = spacesById.get(active.id);
   if (!space) return null;
   return (
-    <div className="flex h-12 cursor-grabbing items-center gap-2 rounded-lg bg-card pr-1 pl-10 shadow-drag">
+    <div className={cn("flex h-12 items-center gap-2 rounded-lg bg-card pr-1 pl-10", LIFTED)}>
       <span className="flex-1 truncate">{space.name}</span>
       <PreviewButtons />
     </div>
