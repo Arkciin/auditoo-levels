@@ -25,7 +25,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { quote, toastUndo, useSafeMutate } from "@/features/use-safe-mutate";
 import { promptInstall, useInstallOffer } from "@/install";
-import { plural } from "@/lib/suggestions";
+import { levelsAndRooms } from "@/lib/suggestions";
 import {
   describeMutationError,
   type PropertySummary,
@@ -153,7 +153,7 @@ function PropertyRow({ summary }: { summary: PropertySummary }) {
             <div className="min-w-0 flex-1">
               <p className="truncate font-semibold">{property.name}</p>
               <p className="text-sm text-muted-foreground tabular-nums">
-                {plural(levelCount, "niveau", "niveaux")}, {plural(spaceCount, "pièce", "pièces")}
+                {levelsAndRooms(levelCount, spaceCount)}
               </p>
             </div>
             <ChevronRight aria-hidden="true" className="size-5 shrink-0 text-muted-foreground" />

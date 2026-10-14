@@ -206,3 +206,13 @@ export function plural(count: number, singular: string, pluralForm: string): str
   const rule = new Intl.PluralRules("fr-FR").select(count);
   return `${count} ${rule === "one" ? singular : pluralForm}`;
 }
+
+/**
+ * The size of a logement, as its row and its screen give it: « 2 niveaux, 5 pièces », « 1 niveau,
+ * aucune pièce », or « Aucun niveau » (rooms only exist within levels): zero reads as a word.
+ */
+export function levelsAndRooms(levelCount: number, roomCount: number): string {
+  if (levelCount === 0) return "Aucun niveau";
+  const rooms = roomCount === 0 ? "aucune pièce" : plural(roomCount, "pièce", "pièces");
+  return `${plural(levelCount, "niveau", "niveaux")}, ${rooms}`;
+}

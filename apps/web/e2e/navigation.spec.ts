@@ -20,7 +20,7 @@ test("the back arrow goes back to the list, so the system back button then leave
 
   await backToList(page);
   await expect(page).toHaveURL("/");
-  await expect(propertyRow(page, name)).toBeVisible();
+  await expect(propertyRow(page, name)).toContainText("Aucun niveau");
 
   await page.goBack();
   await expect(page).not.toHaveURL(/\/logements\//);

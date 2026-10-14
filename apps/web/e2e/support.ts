@@ -187,9 +187,12 @@ export async function createProperty(page: Page, name: string): Promise<void> {
 
 // --- Structure -----------------------------------------------------------------------------------
 
-/** "3 niveaux, 5 pièces", under the header of a logement's screen. */
+/**
+ * "3 niveaux, 5 pièces" or "1 niveau, aucune pièce", under the name of a logement on its screen;
+ * absent while it has no level (its empty state says so).
+ */
 export function structureSummary(page: Page): Locator {
-  return page.getByRole("main").getByText(/^\d+\s+niveaux?,\s+\d+\s+pièces?$/);
+  return page.getByRole("main").getByText(/^\d+\s+niveaux?,\s+(?:\d+\s+pièces?|aucune\s+pièce)$/);
 }
 
 export function level(page: Page, name: string): Locator {

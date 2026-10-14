@@ -15,7 +15,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { quote, toastUndo, useSafeMutate } from "@/features/use-safe-mutate";
-import { plural, suggestLevelNames } from "@/lib/suggestions";
+import { levelsAndRooms, suggestLevelNames } from "@/lib/suggestions";
 import { selectProperty, selectStructure, useSyncStatus, useView } from "@/sync";
 import { AddLevelDrawer } from "./add-level-drawer";
 import { StructureBoard } from "./structure-board";
@@ -125,18 +125,21 @@ export function StructureScreen({ propertyId }: { propertyId: string }) {
         }
       />
       <ScreenBody>
-        <p className="px-4 pt-3 text-sm text-muted-foreground tabular-nums">
-          {plural(structure.length, "niveau", "niveaux")}, {plural(spaceCount, "pièce", "pièces")}
-        </p>
         {structure.length === 0 ? (
+          // Its heading says « Aucun niveau » already: no summary above it.
           <NoLevels onPick={(name) => void quickAdd(name)} onOther={() => setAddingLevel(true)} />
         ) : (
-          <StructureBoard
-            propertyId={propertyId}
-            structure={structure}
-            autoAddLevelId={autoAddLevelId}
-            onAutoAddHandled={clearAutoAdd}
-          />
+          <>
+            <p className="px-4 pt-3 text-sm text-muted-foreground tabular-nums">
+              {levelsAndRooms(structure.length, spaceCount)}
+            </p>
+            <StructureBoard
+              propertyId={propertyId}
+              structure={structure}
+              autoAddLevelId={autoAddLevelId}
+              onAutoAddHandled={clearAutoAdd}
+            />
+          </>
         )}
       </ScreenBody>
       <ActionBar>
