@@ -65,7 +65,7 @@ function uncaughtErrors(page: Page): Error[] {
   return errors;
 }
 
-/** Set by the page for each `securitypolicyviolation` event. */
+/** Exposed to the page, which calls it for each `securitypolicyviolation` event. */
 type CspProbe = { e2eReportCspViolation?: (violation: string) => void };
 
 /** The Content Security Policy violations of every document `page` loads from now on. */
