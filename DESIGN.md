@@ -195,9 +195,10 @@ IndexedDB transaction** before publishing. If anything fails, memory and storage
 
 | Trigger | Behaviour |
 | --- | --- |
-| A local mutation, the page becoming visible, an SSE `poke` (and every reconnection of the stream: pokes sent meanwhile are lost) | Sync now |
-| `online` event, "Synchroniser maintenant" button | Sync now, bypassing the backoff |
-| Every 30 s while the page is visible | Sync, unless a retry is already scheduled |
+| A local mutation | Sync now; while a retry is scheduled, wait for it: the mutation is safe in the outbox, and says nothing about the network |
+| An SSE `poke`, every (re)connection of the stream (pokes sent meanwhile are lost), the page becoming visible | Sync now, even while backing off: the server just proved reachable, or the user is back |
+| `online` event, "Synchroniser maintenant" button | Sync now and reset the backoff |
+| Every 30 s while the page is visible | Sync, unless a retry is already scheduled; reopen the event stream if it gave up |
 | A failed cycle | Retry after 1 s, doubling up to 30 s, ±20 % jitter so devices cut off together do not retry in lockstep |
 
 A cycle is push then pull, each request bounded by a 15 s timeout (weak mobile networks hang rather

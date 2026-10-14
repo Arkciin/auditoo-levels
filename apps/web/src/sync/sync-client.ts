@@ -166,6 +166,18 @@ export function retryDelay(failures: number, random: () => number = Math.random)
 
 type CycleOutcome = "ok" | "failed" | "skipped";
 
+/**
+ * Why a sync is requested, which decides how it treats the backoff after failed cycles:
+ * - `routine` (a local mutation, the periodic tick): while a retry is scheduled, waits for it. It
+ *   says nothing about the network or the server, and the mutation is safe in the outbox.
+ * - `signal` (a server poke, the event stream (re)connecting, the page becoming visible): syncs
+ *   now. The server just proved reachable, or the user is back, maybe where the network is. A new
+ *   failure still lengthens the backoff.
+ * - `urgent` (`syncNow()`, the `online` event): syncs now and resets the backoff; if the cycle in
+ *   flight fails, retries at once.
+ */
+type SyncTrigger = "routine" | "signal" | "urgent";
+
 interface SyncWaiter {
   /** Index of the last cycle started when `syncNow()` was called: a later one must complete. */
   readonly after: number;
@@ -244,7 +256,7 @@ export class SyncClient {
   private loop: Promise<void> = Promise.resolve();
   private looping = false;
   private syncRequested = false;
-  /** Set by strong signals (`syncNow()`, network back): they bypass the backoff once. */
+  /** An `urgent` request came during the current cycle: retry at once if it fails. */
   private urgentRequest = false;
   private cyclesStarted = 0;
   private waiters: SyncWaiter[] = [];
@@ -348,13 +360,14 @@ export class SyncClient {
       this.publish({ view, pending: [...this.state.pending, mutation] });
       this.notifyOtherTabs();
     });
-    if (this.started) this.requestSync();
+    if (this.started) this.requestSync("routine");
   };
 
   /**
    * Starts background sync: an initial cycle, then a cycle after each local mutation, when the
    * network comes back, when the page becomes visible, when the server pokes (SSE), every
-   * `pullIntervalMs` while visible, and on retries with exponential backoff after a failure.
+   * `pullIntervalMs` while visible, and on retries with exponential backoff after a failure
+   * (which local mutations and the periodic sync wait for, see {@link SyncTrigger}).
    */
   start(): void {
     if (this.started || this.disposed) return;
@@ -365,7 +378,7 @@ export class SyncClient {
     browserDocument()?.addEventListener("visibilitychange", this.handleVisibilityChange);
     this.pullTimer = setInterval(this.handleTick, this.pullIntervalMs);
     this.openEvents();
-    this.requestSync();
+    this.requestSync("signal");
   }
 
   /** Stops background sync. A cycle in progress completes; `syncNow()` keeps working. */
@@ -392,7 +405,7 @@ export class SyncClient {
     const done = new Promise<void>((resolve) => {
       this.waiters.push({ after: this.cyclesStarted, resolve });
     });
-    this.requestUrgentSync();
+    this.requestSync("urgent");
     return done;
   }
 
@@ -414,22 +427,21 @@ export class SyncClient {
 
   // --- Sync cycles -----------------------------------------------------------------------------
 
-  private requestSync(): void {
+  private requestSync(trigger: SyncTrigger): void {
     if (this.disposed) return;
+    if (trigger === "urgent") {
+      this.failures = 0;
+      this.urgentRequest = true;
+    }
     this.syncRequested = true;
+    // Backing off: the scheduled retry will see the request.
+    if (trigger === "routine" && this.retryTimer !== undefined) return;
     if (!this.looping) this.loop = this.runLoop();
-  }
-
-  /** A sync that skips the backoff: asked for by the user, or the network just came back. */
-  private requestUrgentSync(): void {
-    this.failures = 0;
-    this.urgentRequest = true;
-    this.requestSync();
   }
 
   private async runLoop(): Promise<void> {
     // `looping` is reset in the same synchronous step as the last `syncRequested` check, so a
-    // request made at any time either is seen by this loop or starts a new one.
+    // request made at any time is seen by this loop, starts a new one, or waits for the retry.
     this.looping = true;
     try {
       while (this.syncRequested && !this.disposed) {
@@ -440,9 +452,9 @@ export class SyncClient {
         const outcome = await this.runCycle();
         this.releaseWaiters(cycle);
         if (outcome === "failed") {
-          // An urgent request made while this cycle was failing deserves a fresh attempt. Other
-          // triggers (local mutations, pokes, ticks) wait for the backoff instead of hammering a
-          // failing server.
+          // An urgent request made while this cycle was failing deserves a fresh attempt. Any
+          // other request made meanwhile waits for the retry, like the routine ones made after
+          // it (see SyncTrigger) instead of hammering a failing server.
           if (this.urgentRequest) {
             this.syncRequested = true;
             continue;
@@ -636,7 +648,7 @@ export class SyncClient {
     this.clearRetry();
     this.retryTimer = setTimeout(() => {
       this.retryTimer = undefined;
-      this.requestSync();
+      this.requestSync("routine");
     }, retryDelay(this.failures));
   }
 
@@ -830,7 +842,7 @@ export class SyncClient {
 
   private readonly handleOnline = (): void => {
     this.reopenEventsIfClosed();
-    this.requestUrgentSync();
+    this.requestSync("urgent");
   };
 
   private readonly handleOffline = (): void => {
@@ -838,18 +850,18 @@ export class SyncClient {
   };
 
   private readonly handleVisibilityChange = (): void => {
-    if (isPageVisible()) this.requestSync();
+    if (isPageVisible()) this.requestSync("signal");
   };
 
   private readonly handleTick = (): void => {
-    // A scheduled retry already covers this period (and respects the backoff).
-    if (!isPageVisible() || this.retryTimer !== undefined) return;
+    if (!isPageVisible()) return;
+    // Even while backing off: a stream that opens again tells that the server is back.
     this.reopenEventsIfClosed();
-    this.requestSync();
+    this.requestSync("routine");
   };
 
   private readonly handlePoke = (): void => {
-    this.requestSync();
+    this.requestSync("signal");
   };
 
   private openEvents(): void {

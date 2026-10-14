@@ -47,6 +47,38 @@ async function createClient(options: TestClientOptions): Promise<SyncClient> {
   return client;
 }
 
+/** EventSource stand-in, whose events tests dispatch themselves. */
+class FakeEventSource extends EventTarget {
+  static readonly CLOSED = 2;
+  static readonly instances: FakeEventSource[] = [];
+  readyState = 1;
+
+  /** The stream opened last. */
+  static last(): FakeEventSource {
+    const events = FakeEventSource.instances.at(-1);
+    if (!events) throw new Error("No EventSource was opened");
+    return events;
+  }
+
+  constructor(readonly url: string) {
+    super();
+    FakeEventSource.instances.push(this);
+  }
+
+  close() {
+    this.readyState = FakeEventSource.CLOSED;
+  }
+}
+
+/** `document` stand-in, whose visibility tests set themselves. */
+type FakePage = EventTarget & { visibilityState: DocumentVisibilityState };
+
+function fakePage(): FakePage {
+  return Object.assign(new EventTarget(), {
+    visibilityState: "visible" as DocumentVisibilityState,
+  });
+}
+
 /** Writes expectations with plain spaces; French typography wants U+00A0 inside « » and before :. */
 function french(text: string): string {
   return text.replaceAll("« ", "«\u00a0").replaceAll(" »", "\u00a0»").replaceAll(" :", "\u00a0:");
@@ -140,7 +172,11 @@ describe("SyncClient", () => {
     client.start();
     await waitForState(client, (s) => s.status.connection === "offline"); // Retry in 1 s.
 
-    await client.mutate("createProperty", { id: P1, name: "Maison" }); // Fails again: retry in 2 s.
+    // A change made meanwhile says nothing about the network: it waits for the retry.
+    await client.mutate("createProperty", { id: P1, name: "Maison" });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(transport.attempts).toBe(1);
+    await vi.advanceTimersByTimeAsync(1); // Fails again: retry in 2 s.
     await waitForState(client, (s) => transport.attempts === 2 && s.status.phase === "idle");
     expect(client.getState().status).toMatchObject({ connection: "offline", lastError: null });
 
@@ -150,6 +186,37 @@ describe("SyncClient", () => {
     await vi.advanceTimersByTimeAsync(1);
     await waitForState(client, (s) => s.status.pendingCount === 0);
     expect(client.getState().status.connection).toBe("online");
+    expect(server.snapshot().properties.has(P1)).toBe(true);
+  });
+
+  it.each<[string, (fakes: { events: FakeEventSource; page: FakePage }) => void]>([
+    ["the event stream reconnects", ({ events }) => events.dispatchEvent(new Event("open"))],
+    ["the server pokes", ({ events }) => events.dispatchEvent(new Event("poke"))],
+    [
+      "the page shows again",
+      ({ page }) => {
+        page.visibilityState = "visible";
+        page.dispatchEvent(new Event("visibilitychange"));
+      },
+    ],
+  ])("syncs at once when %s, even while backing off", async (_, signal) => {
+    // With fake timers the backoff never elapses: only the signal can complete the sync.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const page = fakePage();
+    vi.stubGlobal("document", page);
+    const server = new MemoryServer();
+    const { client, transport } = await createDevice(server, { eventsUrl: "/api/events" });
+    transport.mode = "offline";
+    client.start();
+    await waitForState(client, (s) => s.status.connection === "offline"); // Backing off.
+    await client.mutate("createProperty", { id: P1, name: "Maison" }); // Waits for the retry.
+    expect(transport.attempts).toBe(1);
+
+    transport.mode = "online";
+    signal({ events: FakeEventSource.last(), page });
+
+    await waitForState(client, (s) => s.status.pendingCount === 0);
     expect(server.snapshot().properties.has(P1)).toBe(true);
   });
 
@@ -398,43 +465,27 @@ describe("SyncClient", () => {
   });
 
   it("syncs when the server pokes, and closes the event stream when stopped", async () => {
-    class FakeEventSource extends EventTarget {
-      static readonly CLOSED = 2;
-      static readonly instances: FakeEventSource[] = [];
-      readyState = 1;
-
-      constructor(readonly url: string) {
-        super();
-        FakeEventSource.instances.push(this);
-      }
-
-      close() {
-        this.readyState = FakeEventSource.CLOSED;
-      }
-    }
     vi.stubGlobal("EventSource", FakeEventSource);
     const server = new MemoryServer();
     const author = await createDevice(server);
     const reader = await createDevice(server, { eventsUrl: "/api/events" });
     reader.client.start();
     await waitForState(reader.client, (s) => s.status.lastSyncedAt !== null);
-    const [events] = FakeEventSource.instances;
-    expect(events?.url).toBe("/api/events");
+    const events = FakeEventSource.last();
+    expect(events.url).toBe("/api/events");
 
     await author.client.mutate("createProperty", { id: P1, name: "Maison" });
     await author.client.syncNow();
-    events?.dispatchEvent(new Event("poke"));
+    events.dispatchEvent(new Event("poke"));
 
     await waitForState(reader.client, (s) => s.view.properties.has(P1));
     reader.client.stop();
-    expect(events?.readyState).toBe(FakeEventSource.CLOSED);
+    expect(events.readyState).toBe(FakeEventSource.CLOSED);
   });
 
   it("syncs periodically while the page is visible, and when it shows again", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
-    const page = Object.assign(new EventTarget(), {
-      visibilityState: "visible" as DocumentVisibilityState,
-    });
+    const page = fakePage();
     vi.stubGlobal("document", page);
     const server = new MemoryServer();
     const author = await createDevice(server);
