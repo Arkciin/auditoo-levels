@@ -7,11 +7,11 @@ import { bodyLimit } from "hono/body-limit";
 import { except } from "hono/combine";
 import { compress } from "hono/compress";
 import { HTTPException } from "hono/http-exception";
-import { secureHeaders } from "hono/secure-headers";
 import { streamSSE } from "hono/streaming";
 import type { z } from "zod";
 import { onlyRow, type SqlClient } from "./db/sql";
 import { logger } from "./logger";
+import { securityHeaders } from "./security-headers";
 import { Pokes } from "./sync/pokes";
 import { processPull } from "./sync/pull";
 import { processPush } from "./sync/push";
@@ -35,7 +35,7 @@ export function createApp({ db, staticDir, signal }: AppOptions): Hono {
   const app = new Hono();
   const pokes = new Pokes();
 
-  app.use(secureHeaders());
+  app.use(securityHeaders());
   app.use(logRequests);
   // Compressing the event stream would buffer pokes.
   app.use(except("/api/events", compress()));
