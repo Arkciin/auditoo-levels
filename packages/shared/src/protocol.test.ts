@@ -1,4 +1,5 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
+import { z } from "zod";
 import { type MutationArgs, mutationNames } from "./mutators";
 import {
   MAX_MUTATIONS_PER_PUSH,
@@ -11,6 +12,7 @@ import {
   pushResponseSchema,
   type ReceivedPushRequest,
 } from "./protocol";
+import { idSchema } from "./schemas";
 
 const CLIENT = "0199f0a0-0000-7000-8000-0000000000a1";
 const PROPERTY = "0199f0a0-0000-7000-8000-000000000001";
@@ -94,6 +96,20 @@ describe("pushResponseSchema", () => {
       rejected: [{ id: 2, reason: "not_applicable" }],
     };
     expect(pushResponseSchema.parse(response)).toEqual(response);
+  });
+
+  it("stays readable by installed apps, whose schema predates rejection reports", () => {
+    // The push response schema of the versions already installed on devices.
+    const installed = z.object({ lastMutationId: z.number().int().nonnegative(), epoch: idSchema });
+    const response: PushResponse = {
+      lastMutationId: 3,
+      epoch: EPOCH,
+      rejected: [{ id: 2, reason: "invalid" }],
+    };
+    expect(installed.parse(JSON.parse(JSON.stringify(response)))).toEqual({
+      lastMutationId: 3,
+      epoch: EPOCH,
+    });
   });
 
   it("reads a response from a server older than rejection reports as rejecting nothing", () => {

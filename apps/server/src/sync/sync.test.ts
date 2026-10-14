@@ -172,6 +172,24 @@ describe("push and pull", () => {
     expect((await push({ clientId: DEVICE_B, mutations: [other] })).rejected).toEqual([]);
   });
 
+  it("reports a rejection to a retry racing the push it repeats", async () => {
+    const request: ReceivedPushRequest = {
+      clientId: DEVICE_A,
+      mutations: [
+        createProperty,
+        mutation(2, { name: "renameLevel", args: { id: UNKNOWN, name: "Fantôme" } }),
+      ],
+    };
+
+    // Whichever processes the rejected mutation, the other skips it and must still report it.
+    const results = await Promise.all([push(request), push(request)]);
+
+    expect(results.map((result) => result.rejected)).toEqual([
+      [{ id: 2, reason: "not_applicable" }],
+      [{ id: 2, reason: "not_applicable" }],
+    ]);
+  });
+
   it("processes, and reports, a mutation sent twice in one push once", async () => {
     const ghost = mutation(2, { name: "renameLevel", args: { id: UNKNOWN, name: "Fantôme" } });
     const result = await push({ clientId: DEVICE_A, mutations: [ghost, createProperty, ghost] });
