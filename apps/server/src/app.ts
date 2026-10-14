@@ -7,11 +7,11 @@ import { bodyLimit } from "hono/body-limit";
 import { except } from "hono/combine";
 import { compress } from "hono/compress";
 import { HTTPException } from "hono/http-exception";
-import { secureHeaders } from "hono/secure-headers";
 import { streamSSE } from "hono/streaming";
 import type { z } from "zod";
 import { onlyRow, type SqlClient } from "./db/sql";
 import { logger } from "./logger";
+import { securityHeaders } from "./security-headers";
 import { Pokes } from "./sync/pokes";
 import { processPull } from "./sync/pull";
 import { processPush } from "./sync/push";
@@ -40,7 +40,7 @@ export function createApp({ db, staticDir, signal }: AppOptions): Hono {
   const app = new Hono();
   const pokes = new Pokes();
 
-  app.use(secureHeaders());
+  app.use(securityHeaders());
   app.use(logRequests);
   // Compressing the event stream would buffer pokes.
   app.use(except("/api/events", compress()));
@@ -130,16 +130,19 @@ export function createApp({ db, staticDir, signal }: AppOptions): Hono {
  * other GET falls back to index.html so that client-side routes survive a reload.
  */
 function serveSpa(app: Hono, root: string): void {
-  app.use("/assets/*", cacheControl(IMMUTABLE), serveStatic({ root }));
+  // The build writes a Brotli copy of each text file (.br): sent as is to browsers that accept it.
+  const serve = (options: { path?: string } = {}) =>
+    serveStatic({ root, precompressed: true, ...options });
+  app.use("/assets/*", cacheControl(IMMUTABLE), serve());
   // A missing hashed asset is a genuine 404 (typically a stale client asking for a chunk of a
   // previous deploy): the SPA fallback would answer with HTML where JavaScript is expected.
   app.get("/assets/*", (c) => c.notFound());
   app.use(
     "*",
     cacheControl("no-cache", (c) => REVALIDATED_PATHS.has(c.req.path)),
-    serveStatic({ root }),
+    serve(),
   );
-  app.get("*", cacheControl("no-cache"), serveStatic({ root, path: "index.html" }));
+  app.get("*", cacheControl("no-cache"), serve({ path: "index.html" }));
 }
 
 /** Sets Cache-Control on the successful responses of the handlers that follow. */

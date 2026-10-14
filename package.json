@@ -16,7 +16,9 @@
     "typecheck": "pnpm -r typecheck",
     "lint": "biome check .",
     "format": "biome check --write .",
-    "check": "pnpm lint && pnpm typecheck && pnpm test"
+    "check": "pnpm lint && pnpm typecheck && pnpm test",
+    "lighthouse": "node scripts/lighthouse.mjs",
+    "size": "node scripts/bundle-size.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",

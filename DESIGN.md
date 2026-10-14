@@ -315,6 +315,26 @@ that the list stays strictly ordered with valid keys; 500 appends keep keys at 8
   state. Without IndexedDB (some private modes), a screen says so instead of half-working.
 - **HTTP caching** (`apps/server/src/app.ts`): hashed `/assets/*` immutable for a year, entry points
   (`/`, `index.html`, `sw.js`, manifest) revalidated, a missing asset a real 404 rather than HTML.
+- **First load.** `index.html` preloads the home screen's code and its typeface, which the router
+  would otherwise only request once the app runs; the build writes Brotli copies of its text
+  files, sent to browsers that accept them; the first render is a React transition, so it runs in
+  short slices rather than one long task. CI keeps the bundle within a budget (`pnpm size`).
+
+## Security headers
+
+`apps/server/src/security-headers.ts`, on every response:
+
+- **Content Security Policy**: everything from the app's origin (`default-src 'self'`); scripts
+  only from its files, never inline or through `eval` (Zod's compiler, which uses `new Function`,
+  is off in browsers: `packages/shared/src/zod-config.ts`); no plugins, no `<base>`, no native
+  form submission, never framed. Styles allow inline `<style>` elements: vaul, Sonner and Radix's
+  scroll lock insert some at runtime, the latter with computed content, so no hash fits, and a
+  static, precached `index.html` cannot carry per-response nonces. Style attributes in markup stay
+  forbidden (`style-src-attr 'none'`): React sets styles through the CSSOM. Every end-to-end test
+  fails on a violation.
+- **Permissions-Policy** denies 21 powerful features the app does not use (camera, geolocation,
+  payment, USB…); `Referrer-Policy: no-referrer`, HSTS, `nosniff`, `X-Frame-Options: DENY`,
+  same-origin COOP and CORP.
 
 ## UX decisions
 
@@ -365,14 +385,15 @@ that the list stays strictly ordered with valid keys; 500 appends keep keys at 8
 
 ## Testing strategy
 
-`pnpm test` runs 247 Vitest tests in about 45 s, with no database to install.
+`pnpm test` runs 304 Vitest tests in about a minute, with no database to install.
 
 | Suite | Tests | Covers |
 | --- | --- | --- |
 | `packages/shared` | 56 | Mutators (edit wins, rejections without partial writes, determinism, level copies and their arguments), positions (fast-check property test), name validation, protocol envelopes (one per mutation), push responses old and new, unknown mutation kinds refused |
-| `apps/server`, on in-memory PGlite | 35 | Idempotent retries, rejected and invalid mutations acknowledged and reported with their reason (again to retries, racing or not, and after a push failed half-way), database refusals as permanent (a level copy rolled back whole), sparse ids, no-op mutations, epochs, reset, gapless versions under concurrent pushes; HTTP validation, the largest valid push, cache headers, SSE pokes, SPA fallback; migrations |
-| `apps/web`, on fake-indexeddb | 156 | `SyncClient` against `MemoryServer`, an in-memory reference implementation of the protocol: rejections reported once (lost responses, replays, startup, other tabs), backoff per trigger; storage (id allocation, atomic pulls, reopened connections), transport errors, React bindings, selectors, French descriptions, naming suggestions and level copies, the install offer, relative times; the convergence simulation (12 tests, below) |
-| Playwright, mobile Chromium | 16 | Create, rename, swipe and undo; levels and rooms entry, suggestions kept within reach; level duplication; the room menu (move to another level, rename, delete); drag within and across levels; offline reload then resync, the ready-offline toast; the install offer (Android prompt, iOS steps); a rename reaching a second device through SSE; a change the server rejects, announced and listed in the sync sheet; the sheet's times kept current |
+| `apps/server`, on in-memory PGlite | 41 | Idempotent retries, rejected and invalid mutations acknowledged and reported with their reason (again to retries, racing or not, and after a push failed half-way), database refusals as permanent (a level copy rolled back whole), sparse ids, no-op mutations, epochs, reset, gapless versions under concurrent pushes; HTTP validation, the largest valid push, cache headers, Brotli copies, SSE pokes, SPA fallback; every security header; migrations |
+| `apps/web`, on fake-indexeddb | 166 | `SyncClient` against `MemoryServer`, an in-memory reference implementation of the protocol: rejections reported once (lost responses, replays, startup, other tabs), backoff per trigger; storage (id allocation, atomic pulls, reopened connections), transport errors, React bindings, selectors, French descriptions, naming suggestions and level copies, the install offer, relative times; the convergence simulation (12 tests, below); the contrast of every colour pairing the UI paints, in both themes (WCAG AA) |
+| `apps/web` components, on happy-dom | 41 | Driven by role and accessible name (Testing Library): swipe to delete (40 % threshold, flicks, axis lock against vertical scroll, the swallowed click, a failed deletion sliding back), rename in place (Enter, blur, Escape, a rejected save), rapid room entry (taps faster than saves keep order and numbering), the sync indicator's wording and accessible name |
+| Playwright, mobile Chromium | 24 | Create, rename, swipe and undo; levels and rooms entry, suggestions kept within reach; level duplication; the room menu (move to another level, rename, delete); drag within and across levels; offline reload then resync, the ready-offline toast; the install offer (Android prompt, iOS steps); a rename reaching a second device through SSE; a change the server rejects, announced and listed in the sync sheet; axe scans of every screen, sheet, menu and banner in both themes; the browser enforcing the Content Security Policy and the Permissions-Policy |
 
 **The convergence simulation** (`apps/web/src/sync/convergence.test.ts`) is the sync engine's
 safety net. Three devices share a `MemoryServer` for 300 random steps, over 8 seeds. At each step a
@@ -389,8 +410,10 @@ The server was also checked by hand against PostgreSQL 16: concurrent migrations
 mutations racing two server instances, gapless versions; and the whole end-to-end suite passes
 against the production build backed by PostgreSQL 16, as deployed. End-to-end tests (`apps/web/e2e/`) drive an
 emulated Pixel 7 against the production build: real touch swipes, a second device as a second
-browser context, `context.setOffline`. CI (`.github/workflows/ci.yml`) runs Biome, typecheck, unit
-and end-to-end tests on every push.
+browser context, `context.setOffline`. Two gates run across the whole suite: a test fails on any
+Content Security Policy violation, and the accessibility spec fails on any serious or critical axe
+violation. CI (`.github/workflows/ci.yml`) runs Biome, typecheck, unit tests, the bundle size
+budget and end-to-end tests on every push.
 
 ## Tradeoffs considered and rejected
 
@@ -459,7 +482,9 @@ and end-to-end tests on every push.
 | [Hono](https://hono.dev) | HTTP API, SSE, static files, secure headers |
 | [node-postgres](https://node-postgres.com) and [PGlite](https://pglite.dev) | PostgreSQL in production; Postgres in WASM for dev and tests |
 | [Vitest](https://vitest.dev), [fast-check](https://fast-check.dev), [fake-indexeddb](https://github.com/dumbmatter/fakeIndexedDB) | Unit and integration tests, property-based tests, IndexedDB in Node |
+| [Testing Library](https://testing-library.com) and [happy-dom](https://github.com/capricorn86/happy-dom) | Component tests, by role and accessible name |
 | [Playwright](https://playwright.dev) | End-to-end tests on mobile Chromium |
+| [axe-core](https://github.com/dequelabs/axe-core) and [Lighthouse](https://developer.chrome.com/docs/lighthouse) | Accessibility scans in the end-to-end suite; audits of the built app |
 | [Biome](https://biomejs.dev) | Lint and format |
 | [Atkinson Hyperlegible Next](https://fontsource.org/fonts/atkinson-hyperlegible-next) | The only typeface, self-hosted through Fontsource |
 

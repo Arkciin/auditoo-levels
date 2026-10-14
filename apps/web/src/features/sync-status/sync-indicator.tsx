@@ -180,7 +180,12 @@ function SyncDetails() {
         <DrawerTitle>{presentation.title}</DrawerTitle>
         <DrawerDescription>{presentation.explanation}</DrawerDescription>
       </DrawerHeader>
-      <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-4">
+      <section
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: it scrolls and may hold nothing focusable: without a tab stop, a keyboard could not scroll it (WCAG 2.1.1)
+        tabIndex={0}
+        aria-label="Détail des modifications"
+        className="flex min-h-0 flex-col gap-4 overflow-y-auto px-4"
+      >
         <section aria-labelledby="pending-title">
           <h3 id="pending-title" className="pb-1 text-sm font-semibold">
             {descriptions.length === 0
@@ -238,7 +243,7 @@ function SyncDetails() {
             </ol>
           </section>
         ) : null}
-      </div>
+      </section>
       <DrawerFooter>
         <Button
           size="lg"

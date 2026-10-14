@@ -22,25 +22,30 @@ for hours, never loses data, and is fast with one thumb.
 | `apps/server/src/sync/` | `push.ts`, `pull.ts`, `server-tx.ts` (mutators on SQL), `queries.ts` (SELECTs in shared shapes), `pokes.ts` (SSE) |
 | `apps/server/src/db/` | `migrations.ts` (append-only SQL), `migrate.ts`, `sql.ts` (node-postgres or PGlite) |
 | `apps/server/src/app.ts` | Routes, request validation, cache headers, static hosting of the PWA |
+| `apps/server/src/security-headers.ts` | Content Security Policy, Permissions-Policy and the other security headers |
 | `apps/web/src/sync/` | `sync-client.ts` (engine), `storage.ts` (IndexedDB), `transport.ts`, `react.tsx` (hooks), `selectors.ts`, `describe.ts` (French texts) |
 | `apps/web/src/sync/test-support/` | `MemoryServer` (reference server), `TestDevice`, fixtures |
 | `apps/web/src/features/` | Screens; `use-safe-mutate.ts` (mutate with a French error toast, undo toast); `sync-status/` (pill, sheet, toasts of rejected changes) |
 | `apps/web/src/components/` | Layout, `SwipeToDelete`, `EditableText`, `DatumMarker`; `ui/` is shadcn/ui source |
 | `apps/web/src/lib/suggestions.ts` | French level ranking, room suggestions, numbering, `plural()` |
 | `apps/web/src/sw.ts`, `pwa.ts`, `install.ts` | Service worker (Serwist), its registration, the install offer |
-| `apps/web/e2e/` | Playwright specs; `support.ts` holds the French locators and the gestures |
+| `apps/web/e2e/` | Playwright specs; `support.ts` holds the French locators and the gestures, `accessibility.ts` the axe scans |
+| `scripts/` | `bundle-size.mjs` (`pnpm size`, the budget CI enforces), `lighthouse.mjs` (`pnpm lighthouse`) |
 
 ## Commands
 
 ```sh
 pnpm dev                 # API on :3000 (PGlite) + web on :5173 (Vite, proxies /api)
 pnpm check               # lint + typecheck + unit tests: run it before you finish
-pnpm test                # Vitest, all workspaces (about 40 s)
+pnpm test                # Vitest, all workspaces (about a minute)
 pnpm format              # Biome: formatting, safe lint fixes, import order
 pnpm build && pnpm e2e   # Playwright against the production build
+pnpm size                # after a build: compressed sizes against the CI budget
+pnpm lighthouse          # against a running build (pnpm start): Lighthouse on an emulated phone
 
-# One workspace (shared, server or web), or one file:
+# One workspace (shared, server or web), the web app's component tests only, or one file:
 pnpm vitest run --project web
+pnpm vitest run --project "web (dom)"
 pnpm vitest run apps/web/src/sync/convergence.test.ts
 ```
 
@@ -87,7 +92,7 @@ pnpm vitest run apps/web/src/sync/convergence.test.ts
   one) for « … » with non-breaking spaces and `plural()` for counts ("3 pièces").
 - **Touch first.** `Button` sizes give 44 px targets; inputs keep `text-base` (16 px, or iOS zooms
   in); interactive elements inside a swipeable row get `data-no-swipe`; every control has an
-  accessible French name, which the e2e tests select by.
+  accessible French name, which the e2e and component tests select by.
 - **Reading data**: components use `useView(selector)` with selectors memoized per snapshot
   (`apps/web/src/sync/selectors.ts`), and `useSyncStatus()` for the status alone. Event handlers
   that compute a position or a name read `client.getState().view`: taps can outrun React renders.
@@ -101,6 +106,17 @@ pnpm vitest run apps/web/src/sync/convergence.test.ts
 - Shared logic: `packages/shared/src/*.test.ts`. Server: `apps/server/src/**/*.test.ts`, on
   in-memory PGlite (`createTestDb()` in `apps/server/src/testing.ts`). Sync engine:
   `apps/web/src/sync/*.test.ts`, on fake-indexeddb against `MemoryServer`.
+- Components and screens: `*.test.tsx` next to them in `apps/web/src/components` or
+  `apps/web/src/features`, which run in happy-dom (project `web (dom)`). Drive them with Testing
+  Library and user-event by role and French accessible name, assert on what the user sees; a
+  component that reads data gets a real `SyncClient` (`TestDevice`). happy-dom has no layout:
+  stub sizes (`offsetWidth`) when behaviour depends on them.
+- Two gates run through the whole e2e suite: any Content Security Policy violation fails a test
+  (no inline script, no `eval`, no `style` attribute in markup; React's `style` prop is fine), and
+  `accessibility.spec.ts` fails on a serious or critical axe violation. A new screen, sheet or menu
+  gets an `expectAccessible` step there.
+- Colours: a new pairing of design tokens gets a line in `apps/web/src/styles.test.ts`, which
+  checks WCAG AA contrast in both themes.
 - The convergence simulation (`apps/web/src/sync/convergence.test.ts`) must stay green, and must
   know every mutation (`simulateUser`): it fails when a mutation kind is never exercised.
 - `MemoryServer` mirrors the server's protocol rules: change a rule in both, test it in both.

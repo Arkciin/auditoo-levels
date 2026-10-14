@@ -1,7 +1,7 @@
 import "./styles.css";
 
 import { createRouter, RouterProvider } from "@tanstack/react-router";
-import { StrictMode } from "react";
+import { StrictMode, startTransition } from "react";
 import { createRoot } from "react-dom/client";
 import { toast } from "sonner";
 
@@ -34,13 +34,17 @@ const root = createRoot(rootElement);
 // render the device's data right away (no loading state, even offline).
 try {
   const client = await createBrowserSyncClient();
-  root.render(
-    <StrictMode>
-      <SyncProvider client={client}>
-        <RouterProvider router={router} />
-      </SyncProvider>
-    </StrictMode>,
-  );
+  // As a transition, the first render runs in short slices that let the browser breathe in
+  // between, rather than as one long task: on a slow phone, a tap during startup is not held up.
+  startTransition(() => {
+    root.render(
+      <StrictMode>
+        <SyncProvider client={client}>
+          <RouterProvider router={router} />
+        </SyncProvider>
+      </StrictMode>,
+    );
+  });
 } catch (error) {
   console.error(error);
   root.render(<StorageUnavailable />);

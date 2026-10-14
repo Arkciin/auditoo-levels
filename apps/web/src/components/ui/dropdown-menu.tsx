@@ -129,7 +129,8 @@ function DropdownMenuItem({
       data-variant={variant}
       className={cn(
         itemBase,
-        "px-3 data-[inset]:pl-11 data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 dark:data-[variant=destructive]:focus:bg-destructive/20 data-[variant=destructive]:*:[svg]:text-destructive! [&_svg:not([class*='text-'])]:text-muted-foreground",
+        // A 10 % tint in both themes: at 20 %, dark mode's highlighted "Supprimer" fell to 4.1:1.
+        "px-3 data-[inset]:pl-11 data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 data-[variant=destructive]:*:[svg]:text-destructive! [&_svg:not([class*='text-'])]:text-muted-foreground",
         className,
       )}
       {...props}
