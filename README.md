@@ -86,12 +86,14 @@ Then switch the network off in the browser's developer tools and keep working.
 | `pnpm dev` | API (watch mode, PGlite) and web app (Vite, proxying `/api`), side by side |
 | `pnpm build` | Builds the web app (Vite, then a typecheck) and bundles the server (esbuild) |
 | `pnpm start` | Production server: API and built PWA on port 3000 |
-| `pnpm test` | All unit and integration tests (Vitest); no database needed |
+| `pnpm test` | All unit, integration and component tests (Vitest); no database needed |
 | `pnpm test:watch` | The same, in watch mode |
 | `pnpm e2e` | End-to-end tests (Playwright) against the production build: run `pnpm build` first |
 | `pnpm typecheck` | `tsc` in every workspace, service worker included |
 | `pnpm lint` / `pnpm format` | Biome: check, or fix formatting, lint issues and import order |
 | `pnpm check` | `lint`, `typecheck` and `test` |
+| `pnpm size` | Compressed sizes of the build against their budgets (CI fails past one): after `pnpm build` |
+| `pnpm lighthouse [url]` | Lighthouse on an emulated phone against a running build (default `http://localhost:3000`): median of 3 runs, report in `.lighthouse/` |
 | `pnpm --filter @repo/web icons` | Renders the PNG app icons from their SVG sources |
 
 ## Configuration
@@ -116,6 +118,7 @@ The server reads its environment at startup (`apps/server/src/env.ts`); blank va
 │   │   ├── scripts/build.mjs   esbuild bundle → dist/index.js
 │   │   └── src/
 │   │       ├── app.ts          routes: /api/health, /api/push, /api/pull, /api/events (SSE), SPA
+│   │       ├── security-headers.ts  Content Security Policy, Permissions-Policy and the rest
 │   │       ├── index.ts        startup: database, migrations, HTTP server, graceful shutdown
 │   │       ├── db/             SQL client (node-postgres or PGlite) and migrations
 │   │       └── sync/           push, pull, mutators on SQL (ServerTx), SSE pokes
@@ -132,6 +135,7 @@ The server reads its environment at startup (`apps/server/src/env.ts`); blank va
 │           └── styles.css      Tailwind v4 theme: design tokens, dark mode
 ├── packages/
 │   └── shared/src/             runs on both sides: schemas, mutators, positions, protocol, snapshot
+├── scripts/                    bundle size budget, Lighthouse audit
 ├── docs/                       screenshots, AI workflow notes
 ├── .github/workflows/          CI, keep-warm ping
 ├── render.yaml                 Render Blueprint
@@ -142,19 +146,63 @@ The server reads its environment at startup (`apps/server/src/env.ts`); blank va
 ## Testing
 
 ```sh
-pnpm test                 # unit and integration tests, about 40 s
-pnpm build && pnpm e2e    # end-to-end tests
+pnpm test                 # 275 unit, integration and component tests, about a minute
+pnpm build && pnpm e2e    # 15 end-to-end tests, accessibility and security included
 ```
 
 - **Unit and integration tests** (Vitest) cover the shared domain, the server on an in-memory
-  PGlite, and the sync engine on fake-indexeddb against an in-memory reference server, including a
-  seeded multi-device convergence simulation with flaky networks and restarts.
+  PGlite (security headers included), and the sync engine on fake-indexeddb against an in-memory
+  reference server, including a seeded multi-device convergence simulation with flaky networks and
+  restarts. A palette test checks the contrast of every colour pairing the UI paints, in both
+  themes.
+- **Component tests** (Vitest, [Testing Library](https://testing-library.com), happy-dom) drive the
+  interaction-heavy components as a user would, by role and French accessible name: the swipe to
+  delete (thresholds, flicks, axis lock, the swallowed click, failed deletions), renaming in place,
+  rapid room entry, the sync indicator. They live next to the components (`*.test.tsx`).
 - **End-to-end tests** (Playwright) drive an emulated Pixel 7 against the production server, which
-  they start on port 4174 with a fresh in-memory database. Install the browser once with
-  `pnpm --filter @repo/web exec playwright install chromium`. Tip: to use a Chromium already on
-  your machine instead, set `PLAYWRIGHT_CHROMIUM_PATH=/path/to/chromium`.
-- **CI** (`.github/workflows/ci.yml`, GitHub Actions) runs Biome, typecheck, unit tests, build and
-  end-to-end tests on every push and pull request, and uploads the Playwright report on failure.
+  they start on port 4174 with a fresh in-memory database. Every test fails on an uncaught
+  exception or a Content Security Policy violation. An accessibility spec scans every screen,
+  sheet, menu, field and banner with [axe](https://github.com/dequelabs/axe-core) (WCAG 2.2 A and
+  AA, best practices), in light and dark mode: a serious or critical violation fails it. Install
+  the browser once with `pnpm --filter @repo/web exec playwright install chromium`. Tip: to use a
+  Chromium already on your machine instead, set `PLAYWRIGHT_CHROMIUM_PATH=/path/to/chromium`.
+- **CI** (`.github/workflows/ci.yml`, GitHub Actions) runs Biome, typecheck, unit tests, build, the
+  bundle size budget and end-to-end tests on every push and pull request, and uploads the
+  Playwright report on failure.
+
+## Performance, accessibility, security
+
+Lighthouse 13.5 (`pnpm lighthouse`), its default mobile run: Moto G Power emulation, simulated
+slow 4G and 4× CPU slowdown, first visit (empty storage, no service worker yet), against the
+production build (`pnpm start`) with an empty database. Median of 7 runs, 15 October 2026:
+
+| Performance | Accessibility | Best practices | SEO |
+| :---: | :---: | :---: | :---: |
+| 89 | 100 | 100 | 100 |
+
+First Contentful Paint 2.3 s, Largest Contentful Paint 2.6 s, Total Blocking Time 280 ms,
+Cumulative Layout Shift 0. Measured with Chromium 141 on a 2-vCPU Linux container shared with
+other builds, the browser at raised CPU priority to limit their effect: performance ranged from
+87 to 94 across runs. Before the preloads, Brotli and the sliced first render, one run gave 80,
+and SEO 91 (no robots.txt). What remains is starting a client-rendered app on a slow phone:
+evaluating React, the router and Zod, then React's first commit, where both bottom sheets of the
+home screen mount closed and vaul forces a layout for each. Next steps: mount sheets on first
+open, and prerender the app shell into `index.html` so that something paints before the
+JavaScript runs.
+
+What a phone downloads (`pnpm size`; CI fails past a budget):
+
+| | gzip | Brotli (sent when accepted) | Budget (gzip) |
+| --- | ---: | ---: | ---: |
+| Entry chunk (React, router, app shell) | 70.2 kB | 60.9 kB | 80 kB |
+| Everything before the first screen (entry and preloads) | 199.3 kB | 174.7 kB | 220 kB |
+| All JavaScript, lazy screens included | 222.2 kB | 195.2 kB | 260 kB |
+| CSS | 7.8 kB | 6.9 kB | 10 kB |
+
+The server sends a Content Security Policy that keeps everything on the app's origin and scripts
+to its own files (no inline code, no `eval`), a Permissions-Policy that denies the powerful
+features the app does not use (camera, geolocation, payment…), `Referrer-Policy: no-referrer`,
+HSTS, `X-Frame-Options: DENY` and same-origin COOP and CORP (`apps/server/src/security-headers.ts`).
 
 ## Deployment
 
