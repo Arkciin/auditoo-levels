@@ -329,7 +329,8 @@ invariants must hold (parents exist, positions valid, no room left its logement)
 mutation kinds must have run. Four more seeds also wipe the server's database twice.
 
 The server was also checked by hand against PostgreSQL 16: concurrent migrations, 12 devices × 25
-mutations racing two server instances, gapless versions. End-to-end tests (`apps/web/e2e/`) drive an
+mutations racing two server instances, gapless versions; and the whole end-to-end suite passes
+against the production build backed by PostgreSQL 16, as deployed. End-to-end tests (`apps/web/e2e/`) drive an
 emulated Pixel 7 against the production build: real touch swipes, a second device as a second
 browser context, `context.setOffline`. CI (`.github/workflows/ci.yml`) runs Biome, typecheck, unit
 and end-to-end tests on every push.
