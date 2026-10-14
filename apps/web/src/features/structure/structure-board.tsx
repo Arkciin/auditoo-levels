@@ -37,7 +37,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { type Level, positionAtIndex, type Space } from "@repo/shared";
+import type { Level, Space } from "@repo/shared";
 import {
   ArrowUpDown,
   Copy,
@@ -70,6 +70,7 @@ import { AddSpace } from "./add-space";
 import { HighlightProvider, HighlightTint, scrollBehavior, useHighlight } from "./highlight";
 import { MoveSpaceDrawer } from "./move-space-drawer";
 import { useDuplicateLevel } from "./use-duplicate-level";
+import { useMoveLevel, useMoveSpace } from "./use-move";
 
 type Containers = Readonly<Record<string, readonly string[]>>;
 
@@ -105,7 +106,8 @@ export function StructureBoard({
   autoAddLevelId: string | null;
   onAutoAddHandled: () => void;
 }) {
-  const safeMutate = useSafeMutate();
+  const moveLevel = useMoveLevel(propertyId);
+  const moveSpace = useMoveSpace(propertyId);
   const [active, setActive] = useState<{ id: string; type: DragData["type"] } | null>(null);
   const [dragContainers, setDragContainers] = useState<Containers | null>(null);
   const lastOverId = useRef<UniqueIdentifier | null>(null);
@@ -222,22 +224,18 @@ export function StructureBoard({
     setActive(null);
 
     if (type === "level") {
+      const level = levels.find((candidate) => candidate.id === activeId);
       const from = levelIds.indexOf(activeId);
       const to = over ? levelIds.indexOf(String(over.id)) : -1;
-      if (from >= 0 && to >= 0 && from !== to) {
-        const siblings = arrayMove(levels, from, to).filter((level) => level.id !== activeId);
-        if (
-          await safeMutate("moveLevel", { id: activeId, position: positionAtIndex(siblings, to) })
-        )
-          haptic(8);
-      }
+      if (level && from >= 0 && to >= 0 && from !== to) await moveLevel(level, to);
       return;
     }
 
     const current = dragContainers ?? committed;
     const container = findContainer(current, activeId);
     const space = spacesById.get(activeId);
-    if (over && container && space) {
+    const target = levels.find((level) => level.id === container);
+    if (over && container && space && target) {
       let ids = current[container] ?? [];
       const from = ids.indexOf(activeId);
       const to = ids.indexOf(String(over.id));
@@ -245,16 +243,7 @@ export function StructureBoard({
       const index = ids.indexOf(activeId);
       const moved =
         space.levelId !== container || committed[container]?.indexOf(activeId) !== index;
-      if (moved) {
-        // Neighbours keep their committed relative order, so their positions are sorted.
-        const siblings = ids
-          .filter((id) => id !== activeId)
-          .map((id) => spacesById.get(id))
-          .filter((s): s is Space => s !== undefined);
-        const position = positionAtIndex(siblings, index);
-        if (await safeMutate("moveSpace", { id: activeId, levelId: container, position }))
-          haptic(8);
-      }
+      if (moved) await moveSpace(space, target, index);
     }
     // Cleared after the mutation so the room does not jump back for a frame.
     setDragContainers(null);

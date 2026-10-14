@@ -16,7 +16,9 @@ import {
   roomHandle,
   savedOnServer,
   test,
+  toast,
   typeRooms,
+  undo,
   uniqueName,
 } from "./support";
 
@@ -78,6 +80,58 @@ test("reorder rooms and levels with their drag handles", async ({ page }) => {
     await expectRooms(page, "Mezzanine", []);
     await expectRooms(page, "R+1", ["Chambre 1"]);
   });
+});
+
+test("a drop can be taken back from its toast", async ({ page }) => {
+  await createHouse(page);
+
+  await test.step("a room dropped in another level goes back to its level and place", async () => {
+    const message = "Pièce « Bureau » déplacée vers « RDC »";
+    await dragOnto(roomHandle(page, "Bureau"), {
+      item: "Bureau",
+      target: "Séjour",
+      direction: "up",
+    });
+    await expect(toast(page, message)).toBeVisible();
+    await expectRooms(page, "RDC", ["Entrée", "Bureau", "Séjour", "Cuisine"]);
+
+    await undo(page, message);
+    await expectRooms(page, "RDC", ["Entrée", "Séjour", "Cuisine"]);
+    await expectRooms(page, "R+1", ["Chambre 1", "Bureau"]);
+  });
+
+  await test.step("a room dropped within its level goes back to its place", async () => {
+    const message = "Pièce « Cuisine » déplacée";
+    await dragOnto(roomHandle(page, "Cuisine"), {
+      item: "Cuisine",
+      target: "Entrée",
+      direction: "up",
+    });
+    await expect(toast(page, message)).toBeVisible();
+    await expectRooms(page, "RDC", ["Cuisine", "Entrée", "Séjour"]);
+
+    await undo(page, message);
+    await expectRooms(page, "RDC", ["Entrée", "Séjour", "Cuisine"]);
+  });
+
+  await test.step("a level goes back to its place", async () => {
+    const message = "Niveau « Mezzanine » déplacé";
+    await dragOnto(levelHandle(page, "Mezzanine"), {
+      item: "Mezzanine",
+      target: "R+1",
+      direction: "up",
+    });
+    await expect(toast(page, message)).toBeVisible();
+    await expectLevels(page, ["RDC", "Mezzanine", "R+1"]);
+
+    await undo(page, message);
+    await expectLevels(page, ["RDC", "R+1", "Mezzanine"]);
+  });
+
+  await reloadOnceSynced(page);
+  await expectLevels(page, ["RDC", "R+1", "Mezzanine"]);
+  await expectRooms(page, "RDC", ["Entrée", "Séjour", "Cuisine"]);
+  await expectRooms(page, "R+1", ["Chambre 1", "Bureau"]);
 });
 
 test("with a finger, a row follows once its handle is held: within a level, to another level", async ({
