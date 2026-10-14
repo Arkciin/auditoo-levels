@@ -46,10 +46,15 @@ try {
   root.render(<StorageUnavailable />);
 }
 
-void registerServiceWorker((apply) => {
-  toast("Une nouvelle version de Relevé est disponible.", {
-    id: "app-update",
-    duration: Number.POSITIVE_INFINITY,
-    action: { label: "Mettre à jour", onClick: apply },
-  });
+void registerServiceWorker({
+  onUpdateReady: (apply) => {
+    toast("Une nouvelle version de Relevé est disponible.", {
+      id: "app-update",
+      duration: Number.POSITIVE_INFINITY,
+      action: { label: "Mettre à jour", onClick: apply },
+    });
+  },
+  onOfflineReady: () => {
+    toast.success("Relevé fonctionne maintenant sans réseau.", { id: "offline-ready" });
+  },
 });
