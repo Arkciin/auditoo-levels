@@ -14,12 +14,14 @@ export function processPull(
   // that mutation over its own effects.
   return db.transaction(
     async (tx) => {
-      const { version, lastMutationId } = await readSyncState(tx, clientId);
+      const { version, epoch, lastMutationId } = await readSyncState(tx, clientId);
       // A cursor ahead of the server means the database was reset or restored: send everything
-      // and tell the device to replace its data instead of merging into it.
+      // and tell the device to replace its data instead of merging into it. (Devices also compare
+      // epochs, which reveals a replaced database even once its version has caught up.)
       const reset = cursor > version;
       const since = reset ? 0 : cursor;
       return {
+        epoch,
         cursor: version,
         lastMutationId,
         reset,

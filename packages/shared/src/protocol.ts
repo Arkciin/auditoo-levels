@@ -8,6 +8,11 @@
  *   server version). The answer also says which of the device's mutations are already included
  *   (`lastMutationId`), all read from one consistent database snapshot. The device then drops
  *   those from its queue and replays the remaining ones on top of the fresh server state.
+ * - **Epoch**: every response carries the epoch of the server's database, a random id drawn when
+ *   that database is created. A device records the epoch its data comes from and sends it with
+ *   its pushes. Another epoch means the database was replaced (recreated, or restored from a
+ *   backup): the device's cursor and acknowledged mutations mean nothing there, so the server
+ *   processes none of its mutations until the device has started over from a full pull.
  */
 import { z } from "zod";
 import {
@@ -61,15 +66,46 @@ export function applyMutation(tx: MutatorTx, mutation: Mutation): Promise<void> 
   return run(tx, mutation.args, { timestamp: mutation.timestamp });
 }
 
+/**
+ * A mutation as a push carries it: only its envelope is checked when the request arrives. The
+ * server then validates each mutation on its own with `mutationSchema`, and treats an invalid one
+ * (e.g. written by another version of the app, under rules that have changed since) like any
+ * mutation that cannot apply: acknowledged, rejected, nothing written. One bad mutation must not
+ * fail the whole push, or the device would retry it forever and never sync again.
+ */
+export const mutationEnvelopeSchema = z.object({
+  id: z.number().int().positive(),
+  name: z.string(),
+  args: z.unknown(),
+  timestamp: timestampSchema,
+});
+export type MutationEnvelope = z.infer<typeof mutationEnvelopeSchema>;
+
+/** A push as the server accepts it (see `mutationEnvelopeSchema`). */
 export const pushRequestSchema = z.object({
   clientId: idSchema,
-  mutations: z.array(mutationSchema).max(MAX_MUTATIONS_PER_PUSH),
+  /**
+   * Epoch the device's data comes from (its last pull), absent before its first pull. A server
+   * with another epoch processes nothing: the device's outbox may still hold mutations a previous
+   * database acknowledged, and processing a later one first would make the new database count
+   * them as processed, and skip them forever.
+   */
+  epoch: idSchema.optional(),
+  mutations: z.array(mutationEnvelopeSchema).max(MAX_MUTATIONS_PER_PUSH),
 });
-export type PushRequest = z.infer<typeof pushRequestSchema>;
+/** A push as the server receives it: its mutations still have to be validated one by one. */
+export type ReceivedPushRequest = z.infer<typeof pushRequestSchema>;
+
+/** A push as a device sends it: devices only ever produce valid mutations. */
+export interface PushRequest extends ReceivedPushRequest {
+  mutations: Mutation[];
+}
 
 export const pushResponseSchema = z.object({
   /** Highest mutation id the server has processed for this device. */
   lastMutationId: z.number().int().nonnegative(),
+  /** The server's epoch. When it differs from the request's, nothing was processed. */
+  epoch: idSchema,
 });
 export type PushResponse = z.infer<typeof pushResponseSchema>;
 
@@ -81,6 +117,8 @@ export const pullRequestSchema = z.object({
 export type PullRequest = z.infer<typeof pullRequestSchema>;
 
 export const pullResponseSchema = z.object({
+  /** The server's epoch: when it differs from the device's, the device must start over. */
+  epoch: idSchema,
   cursor: z.number().int().nonnegative(),
   lastMutationId: z.number().int().nonnegative(),
   /**

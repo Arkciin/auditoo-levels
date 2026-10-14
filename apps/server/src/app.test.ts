@@ -57,12 +57,14 @@ describe("API", () => {
     const push = await post(app, "/api/push", { clientId: DEVICE, mutations: [createProperty] });
     expect(push.status).toBe(200);
     expect(push.headers.get("cache-control")).toBe("no-store");
-    expect(pushResponseSchema.parse(await push.json())).toEqual({ lastMutationId: 1 });
+    const pushed = pushResponseSchema.parse(await push.json());
+    expect(pushed).toEqual({ lastMutationId: 1, epoch: expect.any(String) });
 
     const pull = await post(app, "/api/pull", { clientId: DEVICE, cursor: 0 });
     expect(pull.status).toBe(200);
     expect(pull.headers.get("cache-control")).toBe("no-store");
     expect(pullResponseSchema.parse(await pull.json())).toEqual({
+      epoch: pushed.epoch,
       cursor: 1,
       lastMutationId: 1,
       reset: false,
@@ -96,6 +98,26 @@ describe("API", () => {
       body: "x".repeat(1024 * 1024 + 1),
     });
     expect(tooLarge.status).toBe(413);
+  });
+
+  it("acknowledges a push with an invalid mutation instead of refusing all of it", async () => {
+    const app = createApp({ db });
+    const invalid = { id: 2, name: "renameProperty", args: { id: PROPERTY }, timestamp: 1_000 };
+    const rename = mutation(3, { name: "renameProperty", args: { id: PROPERTY, name: "Villa" } });
+
+    const push = await post(app, "/api/push", {
+      clientId: DEVICE,
+      mutations: [createProperty, invalid, rename],
+    });
+    expect(push.status).toBe(200);
+    expect(pushResponseSchema.parse(await push.json())).toMatchObject({ lastMutationId: 3 });
+
+    // Only a malformed envelope fails the request: without a usable id, nothing can be tracked.
+    const malformed = await post(app, "/api/push", {
+      clientId: DEVICE,
+      mutations: [{ ...invalid, id: 0 }],
+    });
+    expect(malformed.status).toBe(400);
   });
 
   it("answers unknown API routes with a JSON 404", async () => {

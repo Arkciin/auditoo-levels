@@ -37,6 +37,8 @@ export interface StoredState {
   readonly clientId: string;
   /** Server version the base is up to date with (0 = never pulled). */
   readonly cursor: number;
+  /** Epoch of the server database the base comes from, `null` until the first pull. */
+  readonly epoch: string | null;
   /** Last snapshot confirmed by the server. */
   readonly base: Snapshot;
   /** Mutations not confirmed by the server yet, oldest first. */
@@ -60,7 +62,7 @@ export interface SyncStorage {
   readOutbox(afterId: number, limit: number): Promise<Mutation[]>;
   /**
    * Applies a pull response atomically: replaces the base on reset, upserts the changed rows,
-   * drops the outbox mutations the server has processed and stores the new cursor.
+   * drops the outbox mutations the server has processed and stores the new cursor and epoch.
    */
   commitPull(response: PullResponse): Promise<void>;
   /** Closes the database connection once pending transactions complete. */
@@ -82,7 +84,7 @@ export interface OpenSyncStorageOptions {
 }
 
 interface SyncSchema extends DBSchema {
-  meta: { key: "clientId" | "cursor"; value: string | number };
+  meta: { key: "clientId" | "cursor" | "epoch"; value: string | number };
   properties: { key: string; value: Property };
   levels: { key: string; value: Level };
   spaces: { key: string; value: Space };
@@ -91,14 +93,30 @@ interface SyncSchema extends DBSchema {
 
 const ALL_STORES = ["meta", "properties", "levels", "spaces", "outbox"] as const;
 
+/**
+ * The device storage can no longer be used by this page, which must be reloaded: the database
+ * was deleted, or a newer version of the app took it over from another tab. The message is
+ * user-facing (French).
+ */
+export class StorageClosedError extends Error {
+  override readonly name = "StorageClosedError";
+}
+
+const DELETED =
+  "Les données de Relevé ont été effacées de cet appareil. Rechargez la page pour continuer.";
+const UPGRADED =
+  "Relevé a été mis à jour dans un autre onglet. Rechargez cette page pour continuer.";
+const UNAVAILABLE =
+  "Le stockage de l'appareil est devenu inaccessible. Rechargez la page pour continuer.";
+
 /** Opens (creating or upgrading if needed) the sync database. */
 export async function openSyncStorage(options: OpenSyncStorageOptions = {}): Promise<SyncStorage> {
   const factory = options.indexedDB ?? globalThis.indexedDB;
   if (!factory) {
     throw new Error("Le stockage local (IndexedDB) n'est pas disponible sur cet appareil.");
   }
-  const db = await openDatabase(factory, options.name ?? DEFAULT_DATABASE_NAME);
-  return new IndexedDbSyncStorage(db);
+  const name = options.name ?? DEFAULT_DATABASE_NAME;
+  return new IndexedDbSyncStorage(factory, name, await openDatabase(factory, name));
 }
 
 /**
@@ -111,12 +129,7 @@ async function openDatabase(factory: IDBFactory, name: string): Promise<IDBPData
     // Typing boundary: idb's `wrap` cannot know our schema; `upgrade` creates exactly it.
     upgrade(wrap(request.result) as IDBPDatabase<SyncSchema>, event.oldVersion);
   });
-  const db = (await wrap(request)) as IDBPDatabase<SyncSchema>;
-  // Another tab is opening a newer version of the app: step aside so its upgrade can proceed
-  // instead of being blocked forever. This tab's next storage operation fails, which surfaces as
-  // a sync error (and a failed mutation) until the page is reloaded.
-  db.addEventListener("versionchange", () => db.close());
-  return db;
+  return (await wrap(request)) as IDBPDatabase<SyncSchema>;
 }
 
 function upgrade(db: IDBPDatabase<SyncSchema>, oldVersion: number): void {
@@ -132,79 +145,181 @@ function upgrade(db: IDBPDatabase<SyncSchema>, oldVersion: number): void {
   }
 }
 
-class IndexedDbSyncStorage implements SyncStorage {
-  constructor(private readonly db: IDBPDatabase<SyncSchema>) {}
+/**
+ * Errors of an operation on a connection the browser closed. Its transaction, if any, wrote
+ * nothing (IndexedDB transactions are atomic), so the operation can safely run again.
+ */
+function isConnectionLost(error: unknown): boolean {
+  return error instanceof Error && ["InvalidStateError", "UnknownError"].includes(error.name);
+}
 
-  async loadState(): Promise<StoredState> {
-    // Read-write even though it usually only reads: read-write transactions on overlapping stores
-    // are serialized, which is what makes the client id creation race-free across tabs.
-    const tx = this.db.transaction(ALL_STORES, "readwrite");
-    const meta = tx.objectStore("meta");
-    const storedClientId = await meta.get("clientId");
-    let clientId: string;
-    if (typeof storedClientId === "string") {
-      clientId = storedClientId;
-    } else {
-      clientId = newId();
-      await meta.put(clientId, "clientId");
-    }
-    const [cursor, properties, levels, spaces, pending] = await Promise.all([
-      meta.get("cursor"),
-      tx.objectStore("properties").getAll(),
-      tx.objectStore("levels").getAll(),
-      tx.objectStore("spaces").getAll(),
-      tx.objectStore("outbox").getAll(),
-      tx.done,
-    ]);
-    return {
-      clientId,
-      cursor: typeof cursor === "number" ? cursor : 0,
-      base: {
-        properties: new Map(properties.map((row) => [row.id, row])),
-        levels: new Map(levels.map((row) => [row.id, row])),
-        spaces: new Map(spaces.map((row) => [row.id, row])),
-      },
-      pending,
-    };
+class IndexedDbSyncStorage implements SyncStorage {
+  private connection: Promise<IDBPDatabase<SyncSchema>>;
+  /** The browser closed the connection (iOS in the background, storage pressure…). */
+  private lost = false;
+  /** Why this page can no longer use the database, if so (French, user-facing). */
+  private unusable: string | undefined;
+  private closed = false;
+  /** Identity of the data, to check that a reopened database is still the same one. */
+  private clientId: string | undefined;
+
+  constructor(
+    private readonly factory: IDBFactory,
+    private readonly name: string,
+    db: IDBPDatabase<SyncSchema>,
+  ) {
+    this.watch(db);
+    this.connection = Promise.resolve(db);
   }
 
-  async enqueue(draft: MutationDraft): Promise<Mutation> {
-    // The outbox holds user input that exists nowhere else yet: ask for a write flushed to disk
-    // before the UI shows the change. Browsers may default to "relaxed" durability (Chrome does),
-    // which can lose the latest writes on power loss.
-    const tx = this.db.transaction("outbox", "readwrite", { durability: "strict" });
-    // Typing boundary: with a key path and a key generator, IndexedDB allocates `id` and writes it
-    // into the stored record, so the record is a complete `Mutation` once added.
-    const [id] = await Promise.all([tx.store.add(draft as Mutation), tx.done]);
-    return { ...draft, id };
+  loadState(): Promise<StoredState> {
+    return this.run(async (db) => {
+      // Read-write even though it usually only reads: read-write transactions on overlapping
+      // stores are serialized, which is what makes the client id creation race-free across tabs.
+      const tx = db.transaction(ALL_STORES, "readwrite");
+      const meta = tx.objectStore("meta");
+      const storedClientId = await meta.get("clientId");
+      let clientId: string;
+      if (typeof storedClientId === "string") {
+        clientId = storedClientId;
+      } else {
+        clientId = newId();
+        await meta.put(clientId, "clientId");
+      }
+      const [cursor, epoch, properties, levels, spaces, pending] = await Promise.all([
+        meta.get("cursor"),
+        meta.get("epoch"),
+        tx.objectStore("properties").getAll(),
+        tx.objectStore("levels").getAll(),
+        tx.objectStore("spaces").getAll(),
+        tx.objectStore("outbox").getAll(),
+        tx.done,
+      ]);
+      this.clientId = clientId;
+      return {
+        clientId,
+        cursor: typeof cursor === "number" ? cursor : 0,
+        epoch: typeof epoch === "string" ? epoch : null,
+        base: {
+          properties: new Map(properties.map((row) => [row.id, row])),
+          levels: new Map(levels.map((row) => [row.id, row])),
+          spaces: new Map(spaces.map((row) => [row.id, row])),
+        },
+        pending,
+      };
+    });
+  }
+
+  enqueue(draft: MutationDraft): Promise<Mutation> {
+    return this.run(async (db) => {
+      // The outbox holds user input that exists nowhere else yet: ask for a write flushed to
+      // disk before the UI shows the change. Browsers may default to "relaxed" durability (Chrome
+      // does), which can lose the latest writes on power loss.
+      const tx = db.transaction("outbox", "readwrite", { durability: "strict" });
+      // Typing boundary: with a key path and a key generator, IndexedDB allocates `id` and writes
+      // it into the stored record, so the record is a complete `Mutation` once added.
+      const [id] = await Promise.all([tx.store.add(draft as Mutation), tx.done]);
+      return { ...draft, id };
+    });
   }
 
   readOutbox(afterId: number, limit: number): Promise<Mutation[]> {
-    return this.db.getAll("outbox", IDBKeyRange.lowerBound(afterId, true), limit);
+    return this.run((db) => db.getAll("outbox", IDBKeyRange.lowerBound(afterId, true), limit));
   }
 
-  async commitPull(response: PullResponse): Promise<void> {
-    const tx = this.db.transaction(ALL_STORES, "readwrite");
-    const properties = tx.objectStore("properties");
-    const levels = tx.objectStore("levels");
-    const spaces = tx.objectStore("spaces");
-    // Requests of a transaction run in order: the clears happen before the puts. All of them are
-    // awaited together so that a failing one rejects (and aborts) without unhandled rejections.
-    const requests: Promise<unknown>[] = [];
-    if (response.reset) requests.push(properties.clear(), levels.clear(), spaces.clear());
-    for (const row of response.changes.properties) requests.push(properties.put(row));
-    for (const row of response.changes.levels) requests.push(levels.put(row));
-    for (const row of response.changes.spaces) requests.push(spaces.put(row));
-    if (response.lastMutationId > 0) {
-      requests.push(
-        tx.objectStore("outbox").delete(IDBKeyRange.upperBound(response.lastMutationId)),
-      );
-    }
-    requests.push(tx.objectStore("meta").put(response.cursor, "cursor"));
-    await Promise.all([...requests, tx.done]);
+  commitPull(response: PullResponse): Promise<void> {
+    return this.run(async (db) => {
+      const tx = db.transaction(ALL_STORES, "readwrite");
+      const properties = tx.objectStore("properties");
+      const levels = tx.objectStore("levels");
+      const spaces = tx.objectStore("spaces");
+      // Requests of a transaction run in order: the clears happen before the puts. All of them
+      // are awaited together so that a failing one rejects (and aborts) without unhandled
+      // rejections.
+      const requests: Promise<unknown>[] = [];
+      if (response.reset) requests.push(properties.clear(), levels.clear(), spaces.clear());
+      for (const row of response.changes.properties) requests.push(properties.put(row));
+      for (const row of response.changes.levels) requests.push(levels.put(row));
+      for (const row of response.changes.spaces) requests.push(spaces.put(row));
+      if (response.lastMutationId > 0) {
+        requests.push(
+          tx.objectStore("outbox").delete(IDBKeyRange.upperBound(response.lastMutationId)),
+        );
+      }
+      const meta = tx.objectStore("meta");
+      requests.push(meta.put(response.cursor, "cursor"), meta.put(response.epoch, "epoch"));
+      await Promise.all([...requests, tx.done]);
+    });
   }
 
   close(): void {
-    this.db.close();
+    this.closed = true;
+    this.connection.then(
+      (db) => db.close(),
+      () => {},
+    );
+  }
+
+  /**
+   * Runs `operation` on a live connection. When the browser closed the connection under it, the
+   * connection is reopened and the operation, which wrote nothing, runs once more.
+   */
+  private async run<T>(operation: (db: IDBPDatabase<SyncSchema>) => Promise<T>): Promise<T> {
+    try {
+      return await operation(await this.open());
+    } catch (error) {
+      if (this.closed || this.unusable !== undefined) throw error;
+      if (!this.lost && !isConnectionLost(error)) throw error;
+      this.lost = true;
+      return operation(await this.open());
+    }
+  }
+
+  private open(): Promise<IDBPDatabase<SyncSchema>> {
+    if (this.closed) return Promise.reject(new Error("The sync storage is closed"));
+    if (this.unusable !== undefined) return Promise.reject(new StorageClosedError(this.unusable));
+    if (this.lost) {
+      this.lost = false;
+      // Usually closed already; not if only an error revealed the problem.
+      this.connection.then(
+        (db) => db.close(),
+        () => {},
+      );
+      this.connection = this.reopen();
+    }
+    return this.connection;
+  }
+
+  private async reopen(): Promise<IDBPDatabase<SyncSchema>> {
+    let db: IDBPDatabase<SyncSchema> | undefined;
+    try {
+      db = await openDatabase(this.factory, this.name);
+      // Cleared meanwhile (the site's data was erased), the database comes back empty: our data
+      // is gone, and its fresh key generator would hand out mutation ids the server already saw.
+      const clientId = await db.get("meta", "clientId");
+      if (this.clientId !== undefined && clientId !== this.clientId) {
+        this.unusable = DELETED;
+        throw new StorageClosedError(DELETED);
+      }
+    } catch (error) {
+      db?.close();
+      if (this.unusable !== undefined) throw error;
+      this.lost = true; // Maybe a transient failure: the next operation tries again.
+      throw new StorageClosedError(UNAVAILABLE, { cause: error });
+    }
+    this.watch(db);
+    return db;
+  }
+
+  private watch(db: IDBPDatabase<SyncSchema>): void {
+    db.addEventListener("close", () => {
+      this.lost = true;
+    });
+    // Another tab opens a newer version of the app, or deletes the database: step aside, or it
+    // would be blocked forever. This page runs older code, or lost its data: it must reload.
+    db.addEventListener("versionchange", (event) => {
+      db.close();
+      this.unusable = event.newVersion === null ? DELETED : UPGRADED;
+    });
   }
 }

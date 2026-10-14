@@ -5,7 +5,7 @@
  * moments and restart at random (losing everything in memory). Each one only acts on what it
  * currently shows, like a user would, so they routinely act on stale data. Once the network is
  * back, every device must hold exactly the server's state, nothing must be lost, and the data must
- * still make sense.
+ * still make sense. A second variant also wipes the server's database along the way.
  *
  * Seeded: a failing seed replays identically.
  */
@@ -15,6 +15,7 @@ import {
   isValidPosition,
   type Level,
   type MutationName,
+  MutationRejectedError,
   mutationNames,
   type Positioned,
   type Property,
@@ -22,7 +23,7 @@ import {
   type Snapshot,
   type Space,
 } from "@repo/shared";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   type Action,
   createRandom,
@@ -34,9 +35,16 @@ import {
 import type { NetworkMode } from "./test-support/memory-server";
 
 const SEEDS = [1, 2, 3, 4, 5, 6, 7, 8];
+const WIPE_SEEDS = [1, 2, 3, 4];
 const STEPS = 300;
 const DEVICE_COUNT = 3;
-const NETWORK_MODES: readonly NetworkMode[] = ["online", "online", "offline", "lossy"];
+const NETWORK_MODES: readonly NetworkMode[] = [
+  "online",
+  "online",
+  "offline",
+  "lossy",
+  "lossy-pull",
+];
 
 /** Mutation kinds performed over all seeds: each one must have been exercised. */
 const performed = new Set<MutationName>();
@@ -53,92 +61,151 @@ describe("convergence", () => {
   it.each(SEEDS)("devices converge to the server's state (seed %i)", async (seed) => {
     const warn = vi.spyOn(console, "warn");
     const error = vi.spyOn(console, "error");
-    const random = createRandom(seed);
-    const pick = picker(random);
-    const nextAction = simulateUser(random);
 
-    let clock = Date.UTC(2026, 9, 14);
-    const server = new MemoryServer();
-    const devices = await Promise.all(
-      Array.from({ length: DEVICE_COUNT }, () => TestDevice.create(server, { now: () => clock })),
-    );
-    /**
-     * Mutations each device enqueued. The outbox allocates ids 1, 2, 3…, so this is also the id of
-     * the last one, which the server must have processed in the end: nothing lost.
-     */
-    const enqueued = new Map<TestDevice, number>();
-    /** Property each space was created in: moves must never take it elsewhere. */
-    const propertyOfSpace = new Map<string, string>();
+    const { server } = await runScenario(seed, { wipes: [] });
 
-    /** The user acts on what the device shows at this very moment. */
-    const act = async (device: TestDevice) => {
-      const { view } = device.client.getState();
-      const action = nextAction(view);
-      if (action.name === "createSpace") {
-        const level = view.levels.get(action.args.levelId);
-        if (level) propertyOfSpace.set(action.args.id, level.propertyId);
-      }
-      // Valid on the device's view by construction: a rejection here would be a bug.
-      await device.client.mutate<MutationName>(action.name, action.args);
-      performed.add(action.name);
-      enqueued.set(device, (enqueued.get(device) ?? 0) + 1);
-    };
-
-    try {
-      for (let step = 0; step < STEPS; step++) {
-        clock += 1_000;
-        const device = pick(devices);
-        const roll = random();
-        if (roll < 0.5) {
-          await act(device);
-        } else if (roll < 0.62) {
-          device.transport.mode = pick(NETWORK_MODES);
-        } else if (roll < 0.8) {
-          await device.client.syncNow();
-        } else if (roll < 0.97) {
-          // The user keeps working while a sync is in flight; how far the sync got varies. Waiting
-          // on IndexedDB rather than on a timer keeps the interleaving independent of wall-clock
-          // time (fake-indexeddb schedules everything in one FIFO queue), hence reproducible.
-          const syncing = device.client.syncNow();
-          for (let turns = pick([0, 0, 1, 2]); turns > 0; turns--) await device.storedState();
-          await act(device);
-          await syncing;
-        } else {
-          await device.restart();
-        }
-        await expectConsistent(device);
-      }
-
-      // The network comes back: two rounds let every device push, then pull everyone's work.
-      for (const device of devices) device.transport.mode = "online";
-      for (let round = 0; round < 2; round++) {
-        for (const device of devices) await device.client.syncNow();
-      }
-
-      const expected = rowsOf(server.snapshot());
-      expect(expected.spaces.length).toBeGreaterThan(10); // The scenario did build something.
-      for (const device of devices) {
-        const state = device.client.getState();
-        expect(state.pending).toEqual([]);
-        expect(state.status).toMatchObject({ connection: "online", phase: "idle" });
-        expect(rowsOf(state.view)).toEqual(expected);
-        expect(server.lastMutationIdOf(device.client.clientId)).toBe(enqueued.get(device) ?? 0);
-      }
-      // What each device persisted is that same state, with an empty outbox.
-      for (const device of devices) {
-        await device.restart();
-        expect(rowsOf(device.client.getState().view)).toEqual(expected);
-        expect(device.client.getState().pending).toEqual([]);
-      }
-      expect(server.rejected).toEqual([]);
-      expect(invariantViolations(server.snapshot(), propertyOfSpace)).toEqual([]);
-      expect(warn).not.toHaveBeenCalled(); // No pending mutation ever stopped applying locally.
-      expect(error).not.toHaveBeenCalled();
-    } finally {
-      await Promise.all(devices.map((device) => device.close()));
-    }
+    expect(server.snapshot().spaces.size).toBeGreaterThan(10); // The scenario did build something.
+    // Every mutation reached the server (checked by runScenario), and none was rejected: each one
+    // applied on its device, so it applied on the server too.
+    expect(server.rejected).toEqual([]);
+    expect(warn).not.toHaveBeenCalled(); // No pending mutation ever stopped applying locally.
+    expect(error).not.toHaveBeenCalled();
   });
+
+  it.each(WIPE_SEEDS)(
+    "devices converge across wipes of the server database (seed %i)",
+    async (seed) => {
+      // Logged on purpose: devices starting over, and their mutations on what the wipes destroyed.
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const error = vi.spyOn(console, "error");
+
+      // What a wipe destroyed is gone, but whatever was still pending on a device then, or was
+      // done since, must have reached the new database (checked by runScenario).
+      await runScenario(seed, { wipes: [100, 200] });
+
+      expect(error).not.toHaveBeenCalled();
+    },
+  );
 });
+
+interface Scenario {
+  readonly server: MemoryServer;
+  readonly devices: readonly TestDevice[];
+}
+
+/**
+ * Plays a seeded scenario, wiping the server's database at the given steps. Then brings every
+ * device back online, syncs them all, and checks what must hold after any scenario.
+ */
+async function runScenario(
+  seed: number,
+  { wipes }: { wipes: readonly number[] },
+): Promise<Scenario> {
+  const random = createRandom(seed);
+  const pick = picker(random);
+  const nextAction = simulateUser(random);
+
+  let clock = Date.UTC(2026, 9, 14);
+  const server = new MemoryServer();
+  const devices = await Promise.all(
+    Array.from({ length: DEVICE_COUNT }, () => TestDevice.create(server, { now: () => clock })),
+  );
+  onTestFinished(() => Promise.all(devices.map((device) => device.close())).then(() => {}));
+  /** Mutations each device enqueued: the outbox allocates ids 1, 2, 3…, so also the last id. */
+  const enqueued = new Map<TestDevice, number>();
+  /**
+   * Ids of the mutations the final server must have processed: all of them without wipes; with
+   * wipes, those still in the outbox at the last wipe (unconfirmed, so the device kept them)
+   * and those enqueued since. What a wipe destroyed once confirmed is gone, by nature.
+   */
+  const mustReach = new Map<TestDevice, Set<number>>(devices.map((device) => [device, new Set()]));
+  /** Property each space was created in: moves must never take it elsewhere. */
+  const propertyOfSpace = new Map<string, string>();
+
+  /** The user acts on what the device shows at this very moment. */
+  const act = async (device: TestDevice) => {
+    const { view } = device.client.getState();
+    const action = nextAction(view);
+    if (action.name === "createSpace") {
+      const level = view.levels.get(action.args.levelId);
+      if (level) propertyOfSpace.set(action.args.id, level.propertyId);
+    }
+    try {
+      await device.client.mutate<MutationName>(action.name, action.args);
+    } catch (error) {
+      // Valid on what the device showed, by construction. Only a wipe can make it stale: a sync
+      // in flight may start the device over from the new database before the action applies,
+      // and the user is then told the data changed meanwhile. Anything else is a bug.
+      if (!(error instanceof MutationRejectedError) || wipes.length === 0) throw error;
+      return;
+    }
+    performed.add(action.name);
+    const id = (enqueued.get(device) ?? 0) + 1;
+    enqueued.set(device, id);
+    mustReach.get(device)?.add(id);
+  };
+
+  for (let step = 0; step < STEPS; step++) {
+    clock += 1_000;
+    if (wipes.includes(step)) {
+      server.wipe();
+      for (const device of devices) {
+        const { pending } = await device.storedState();
+        mustReach.set(device, new Set(pending.map((mutation) => mutation.id)));
+      }
+    }
+    const device = pick(devices);
+    const roll = random();
+    if (roll < 0.5) {
+      await act(device);
+    } else if (roll < 0.62) {
+      device.transport.mode = pick(NETWORK_MODES);
+    } else if (roll < 0.8) {
+      await device.client.syncNow();
+    } else if (roll < 0.97) {
+      // The user keeps working while a sync is in flight; how far the sync got varies. Waiting
+      // on IndexedDB rather than on a timer keeps the interleaving independent of wall-clock
+      // time (fake-indexeddb schedules everything in one FIFO queue), hence reproducible.
+      const syncing = device.client.syncNow();
+      for (let turns = pick([0, 0, 1, 2]); turns > 0; turns--) await device.storedState();
+      await act(device);
+      await syncing;
+    } else {
+      await device.restart();
+    }
+    await expectConsistent(device);
+  }
+
+  // The network comes back: two rounds let every device push, then pull everyone's work.
+  for (const device of devices) device.transport.mode = "online";
+  for (let round = 0; round < 2; round++) {
+    for (const device of devices) await device.client.syncNow();
+  }
+
+  const expected = rowsOf(server.snapshot());
+  for (const device of devices) {
+    const state = device.client.getState();
+    expect(state.pending).toEqual([]);
+    expect(state.status).toMatchObject({ connection: "online", phase: "idle" });
+    expect(rowsOf(state.view)).toEqual(expected);
+  }
+  // What each device persisted is that same state, with an empty outbox.
+  for (const device of devices) {
+    await device.restart();
+    expect(rowsOf(device.client.getState().view)).toEqual(expected);
+    expect(device.client.getState().pending).toEqual([]);
+  }
+  // Nothing lost: the server processed every mutation it had to, and never skipped one as
+  // already processed without having processed it.
+  for (const device of devices) {
+    const processed = server.processedIdsOf(device.client.clientId);
+    const missing = [...(mustReach.get(device) ?? [])].filter((id) => !processed.has(id));
+    expect(missing).toEqual([]);
+  }
+  expect(server.lostMutations).toEqual([]);
+  expect(invariantViolations(server.snapshot(), propertyOfSpace)).toEqual([]);
+  return { server, devices };
+}
 
 /**
  * Between two steps, a device's memory must match what it persisted (a crash at any point loses

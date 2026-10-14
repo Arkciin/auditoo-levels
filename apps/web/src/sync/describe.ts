@@ -7,6 +7,7 @@
  * whole queue, use {@link describePendingMutations}, which walks it from the base.
  */
 import { type Mutation, MutationRejectedError, type Snapshot } from "@repo/shared";
+import { StorageClosedError } from "./storage";
 
 type EntityKind = "property" | "level" | "space";
 
@@ -155,6 +156,8 @@ export function describeMutationError(error: unknown): string {
   if (error instanceof MutationRejectedError) {
     return "Cette action ne s'applique plus : les données ont changé entre-temps.";
   }
+  // The page must be reloaded: the message says so.
+  if (error instanceof StorageClosedError) return error.message;
   if (error instanceof Error && error.name === "QuotaExceededError") {
     return "L'appareil n'a plus assez d'espace de stockage pour enregistrer la modification.";
   }

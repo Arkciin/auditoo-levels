@@ -4,7 +4,7 @@
  * databases.
  */
 import "fake-indexeddb/auto";
-import { IDBFactory } from "fake-indexeddb";
+import { forceCloseDatabase, IDBFactory } from "fake-indexeddb";
 import { openSyncStorage, type StoredState, type SyncStorage } from "../storage";
 import { SyncClient, type SyncClientOptions, type SyncState } from "../sync-client";
 import type { Transport } from "../transport";
@@ -49,9 +49,13 @@ export class TestDevice {
     return new TestDevice(indexedDB, transport, options, client);
   }
 
-  /** Closes the app and opens it again: everything in memory is lost, storage survives. */
-  async restart(): Promise<void> {
+  /**
+   * Closes the app and opens it again: everything in memory is lost, storage survives.
+   * `whileClosed` runs in between, e.g. to alter the storage as another app version would have.
+   */
+  async restart(whileClosed?: () => Promise<void>): Promise<void> {
     await this.client.dispose();
+    await whileClosed?.();
     this.client = await openTestClient({
       ...this.options,
       indexedDB: this.indexedDB,
@@ -72,6 +76,33 @@ export class TestDevice {
   }
 
   private inspector: Promise<SyncStorage> | undefined;
+}
+
+/** An IndexedDB factory that keeps the connections it opens, so that tests can close them. */
+export class RecordingIDBFactory extends IDBFactory {
+  readonly connections: IDBDatabase[] = [];
+
+  override open(name: string, version?: number): IDBOpenDBRequest {
+    const request = super.open(name, version);
+    request.addEventListener("success", () => this.connections.push(request.result));
+    return request;
+  }
+
+  /** The connection opened last. */
+  get lastConnection(): IDBDatabase {
+    const connection = this.connections.at(-1);
+    if (!connection) throw new Error("No connection opened yet");
+    return connection;
+  }
+}
+
+/**
+ * Closes a connection the way the browser does when it pulls the plug (iOS with the app in the
+ * background, the site's data being cleared…): no `close()` call, a "close" event instead.
+ */
+export function closeLikeTheBrowser(connection: IDBDatabase): void {
+  // fake-indexeddb types the parameter as the IDBDatabase constructor instead of an instance.
+  (forceCloseDatabase as unknown as (db: IDBDatabase) => void)(connection);
 }
 
 /** Resolves with the first state (the current one included) matching `predicate`. */

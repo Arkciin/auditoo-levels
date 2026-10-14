@@ -64,4 +64,15 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX spaces_level_position_idx ON spaces (level_id, position);
     `,
   },
+  {
+    name: "002_server_epoch",
+    sql: /* sql */ `
+      -- Identity of this database, drawn when it is created. Devices record the epoch their data
+      -- comes from: another epoch means the database was replaced, so their cursor and the
+      -- mutations it acknowledged mean nothing here, and they start over from a full pull.
+      -- Restoring a backup replaces the database too: draw a new epoch right after it with
+      --   UPDATE server_meta SET epoch = gen_random_uuid();
+      ALTER TABLE server_meta ADD COLUMN epoch uuid NOT NULL DEFAULT gen_random_uuid();
+    `,
+  },
 ];

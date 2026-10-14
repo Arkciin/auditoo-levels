@@ -16,6 +16,8 @@ export const SELECT_SPACES = `
 export interface SyncState {
   /** Global server version (the pull cursor). */
   version: number;
+  /** Identity of the database (see migration 002_server_epoch). */
+  epoch: string;
   /** Last mutation processed for the client, 0 if it never pushed. */
   lastMutationId: number;
 }
@@ -24,6 +26,7 @@ export async function readSyncState(sql: Queryable, clientId: string): Promise<S
   const rows = await sql.query<SyncState>(
     `SELECT
        version,
+       epoch,
        COALESCE((SELECT last_mutation_id FROM clients WHERE id = $1), 0) AS "lastMutationId"
      FROM server_meta WHERE id = 1`,
     [clientId],

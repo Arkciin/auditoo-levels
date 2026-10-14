@@ -4,7 +4,9 @@ import { uuid } from "./test-support/fixtures";
 import { createHttpTransport, HttpError, NetworkError, ProtocolError } from "./transport";
 
 const CLIENT = uuid(1);
+const EPOCH = uuid(900);
 const PULLED: PullResponse = {
+  epoch: EPOCH,
   cursor: 3,
   lastMutationId: 2,
   reset: false,
@@ -48,11 +50,12 @@ describe("createHttpTransport", () => {
   });
 
   it("pushes to /api/push", async () => {
-    const fetchMock = answering(JSON.stringify({ lastMutationId: 4 }));
+    const fetchMock = answering(JSON.stringify({ lastMutationId: 4, epoch: EPOCH }));
     const transport = createHttpTransport({ fetch: fetchMock });
 
     await expect(transport.push({ clientId: CLIENT, mutations: [] })).resolves.toEqual({
       lastMutationId: 4,
+      epoch: EPOCH,
     });
     expect(fetchMock).toHaveBeenCalledWith("/api/push", expect.anything());
   });

@@ -1,0 +1,70 @@
+import { describe, expect, it } from "vitest";
+import {
+  MAX_MUTATIONS_PER_PUSH,
+  type MutationEnvelope,
+  mutationSchema,
+  type PushRequest,
+  pushRequestSchema,
+  type ReceivedPushRequest,
+} from "./protocol";
+
+const CLIENT = "0199f0a0-0000-7000-8000-0000000000a1";
+const PROPERTY = "0199f0a0-0000-7000-8000-000000000001";
+
+const valid: MutationEnvelope = {
+  id: 1,
+  name: "createProperty",
+  args: { id: PROPERTY, name: "Maison" },
+  timestamp: 1_000,
+};
+const invalidArgs: MutationEnvelope = {
+  id: 2,
+  name: "renameProperty",
+  args: { id: PROPERTY, name: "" },
+  timestamp: 1_000,
+};
+const unknownName: MutationEnvelope = { id: 3, name: "paintWalls", args: {}, timestamp: 1_000 };
+
+describe("pushRequestSchema", () => {
+  it("accepts a push whose mutations are invalid inside well-formed envelopes", () => {
+    const request = pushRequestSchema.parse({
+      clientId: CLIENT,
+      mutations: [valid, invalidArgs, unknownName, { ...valid, id: 4, args: null }],
+    });
+
+    // Validation happens per mutation, on the server: one bad mutation cannot fail the others.
+    const verdicts = request.mutations.map(
+      (mutation) => mutationSchema.safeParse(mutation).success,
+    );
+    expect(verdicts).toEqual([true, false, false, false]);
+  });
+
+  it.each([
+    ["an id that is not positive", { ...valid, id: 0 }],
+    ["a fractional id", { ...valid, id: 1.5 }],
+    ["a missing name", { id: 1, args: {}, timestamp: 1_000 }],
+    [
+      "missing args (any value is fine, even null, but the key must be there)",
+      { id: 1, name: "createProperty", timestamp: 1_000 },
+    ],
+    ["a negative timestamp", { ...valid, timestamp: -1 }],
+  ])("still refuses an envelope with %s", (_, mutation) => {
+    expect(pushRequestSchema.safeParse({ clientId: CLIENT, mutations: [mutation] }).success).toBe(
+      false,
+    );
+  });
+
+  it(`still caps a push at ${MAX_MUTATIONS_PER_PUSH} mutations`, () => {
+    const mutations = Array.from({ length: MAX_MUTATIONS_PER_PUSH + 1 }, (_, i) => ({
+      ...valid,
+      id: i + 1,
+    }));
+    expect(pushRequestSchema.safeParse({ clientId: CLIENT, mutations }).success).toBe(false);
+  });
+
+  it("is a superset of what devices send", () => {
+    const sent: PushRequest = { clientId: CLIENT, mutations: [mutationSchema.parse(valid)] };
+    const received: ReceivedPushRequest = sent; // Type-level: a device's push is always accepted.
+    expect(pushRequestSchema.parse(received)).toEqual(sent);
+  });
+});

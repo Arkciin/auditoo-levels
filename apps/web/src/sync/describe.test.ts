@@ -1,6 +1,7 @@
 import { type Mutation, MutationRejectedError, mutationArgsSchemas } from "@repo/shared";
 import { describe, expect, it } from "vitest";
 import { describeMutation, describeMutationError, describePendingMutations } from "./describe";
+import { StorageClosedError } from "./storage";
 import { type Action, snapshotOf, uuid } from "./test-support/fixtures";
 
 const PROPERTY = uuid(1);
@@ -159,6 +160,8 @@ describe("describeMutationError", () => {
     expect(describeMutationError(new DOMException("Quota", "QuotaExceededError"))).toBe(
       "L'appareil n'a plus assez d'espace de stockage pour enregistrer la modification.",
     );
+    const reload = "Relevé a été mis à jour dans un autre onglet. Rechargez cette page.";
+    expect(describeMutationError(new StorageClosedError(reload))).toBe(reload);
     expect(describeMutationError(new Error("boom"))).toBe(
       "La modification n'a pas pu être enregistrée sur l'appareil.",
     );

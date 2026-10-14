@@ -54,12 +54,17 @@ export function presentStatus(status: SyncStatus): StatusPresentation {
     };
   }
   if (status.phase === "error") {
+    const message = status.lastError ?? "Le serveur n’a pas accepté la requête.";
+    // Some errors already tell the user what to do (reload the page): don't promise a retry.
+    const followUp = /recharg/i.test(message)
+      ? ""
+      : " Vos modifications restent sur cet appareil et Relevé réessaie automatiquement.";
     return {
       tone: "error",
       icon: TriangleAlert,
       short: "Erreur",
       title: "La synchronisation a échoué",
-      explanation: `${status.lastError ?? "Le serveur n’a pas accepté la requête."} Vos modifications restent sur cet appareil et Relevé réessaie automatiquement.`,
+      explanation: `${message}${followUp}`,
     };
   }
   if (status.phase === "syncing") {

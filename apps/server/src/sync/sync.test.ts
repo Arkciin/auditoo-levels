@@ -2,15 +2,17 @@ import {
   applyMutations,
   applyPull,
   emptySnapshot,
+  type MutationEnvelope,
   newId,
   type PullResponse,
   pullResponseSchema,
+  type ReceivedPushRequest,
 } from "@repo/shared";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { SqlClient } from "../db/sql";
+import { onlyRow, type SqlClient } from "../db/sql";
 import { createTestDb, mutation } from "../testing";
 import { processPull } from "./pull";
-import { processPush } from "./push";
+import { type PushResult, processPush } from "./push";
 
 const DEVICE_A = "0199f0a0-0000-7000-8000-0000000000a1";
 const DEVICE_B = "0199f0a0-0000-7000-8000-0000000000b1";
@@ -37,8 +39,11 @@ const noChanges = { properties: [], levels: [], spaces: [] };
 
 describe("push and pull", () => {
   let db: SqlClient;
+  /** This database's epoch, which every response must carry. */
+  let epoch: string;
   beforeEach(async () => {
     db = await createTestDb();
+    ({ epoch } = onlyRow(await db.query<{ epoch: string }>("SELECT epoch FROM server_meta")));
   });
   afterEach(() => db.close());
 
@@ -49,8 +54,15 @@ describe("push and pull", () => {
     return response;
   }
 
+  /** Pushes, checks that the result carries this database's epoch, and returns the rest. */
+  async function push(request: ReceivedPushRequest): Promise<Omit<PushResult, "epoch">> {
+    const { epoch: answered, ...result } = await processPush(db, request);
+    expect(answered).toBe(epoch);
+    return result;
+  }
+
   it("returns pushed rows in the shared shapes, then nothing new", async () => {
-    expect(await processPush(db, { clientId: DEVICE_A, mutations: seed })).toEqual({
+    expect(await push({ clientId: DEVICE_A, mutations: seed })).toEqual({
       lastMutationId: 3,
       version: 3,
       changed: true,
@@ -58,6 +70,7 @@ describe("push and pull", () => {
 
     const first = await pull(DEVICE_A, 0);
     expect(first).toEqual({
+      epoch,
       cursor: 3,
       lastMutationId: 3,
       reset: false,
@@ -71,6 +84,7 @@ describe("push and pull", () => {
     expect(applyPull(emptySnapshot, first)).toEqual(await applyMutations(emptySnapshot, seed));
 
     expect(await pull(DEVICE_A, first.cursor)).toEqual({
+      epoch,
       cursor: 3,
       lastMutationId: 3,
       reset: false,
@@ -79,8 +93,8 @@ describe("push and pull", () => {
   });
 
   it("sends soft-deleted rows, so that deletions sync", async () => {
-    await processPush(db, { clientId: DEVICE_A, mutations: seed });
-    await processPush(db, {
+    await push({ clientId: DEVICE_A, mutations: seed });
+    await push({
       clientId: DEVICE_A,
       mutations: [mutation(4, { name: "deleteSpace", args: { id: KITCHEN } }, 2_000)],
     });
@@ -93,8 +107,8 @@ describe("push and pull", () => {
   });
 
   it("applies a retried batch only once", async () => {
-    const first = await processPush(db, { clientId: DEVICE_A, mutations: seed });
-    const retry = await processPush(db, { clientId: DEVICE_A, mutations: seed });
+    const first = await push({ clientId: DEVICE_A, mutations: seed });
+    const retry = await push({ clientId: DEVICE_A, mutations: seed });
 
     expect(retry).toEqual({ ...first, changed: false });
     const rows = await db.query(
@@ -104,7 +118,7 @@ describe("push and pull", () => {
 
     // A retry carrying one new mutation applies just that one.
     const next = mutation(4, { name: "renameLevel", args: { id: RDC, name: "Rez-de-chaussée" } });
-    expect(await processPush(db, { clientId: DEVICE_A, mutations: [...seed, next] })).toEqual({
+    expect(await push({ clientId: DEVICE_A, mutations: [...seed, next] })).toEqual({
       lastMutationId: 4,
       version: 4,
       changed: true,
@@ -112,7 +126,7 @@ describe("push and pull", () => {
   });
 
   it("acknowledges a rejected mutation without blocking the ones after it", async () => {
-    const result = await processPush(db, {
+    const result = await push({
       clientId: DEVICE_A,
       mutations: [
         createProperty,
@@ -126,12 +140,34 @@ describe("push and pull", () => {
     expect(changes.levels.map((level) => level.id)).toEqual([RDC]);
   });
 
-  it("rejects a mutation the database refuses (SQLSTATE class 22) as permanent", async () => {
-    const result = await processPush(db, {
+  it("acknowledges invalid mutations as rejected and still applies the others", async () => {
+    // What another version of the app could send: the envelope is fine, the content is not.
+    const invalid: MutationEnvelope[] = [
+      { id: 2, name: "renameProperty", args: { id: PROPERTY, name: "" }, timestamp: 1_000 },
+      // PostgreSQL text cannot hold NUL: the schema refuses it before it reaches the database.
+      { id: 3, name: "renameProperty", args: { id: PROPERTY, name: "Ma\u0000ison" }, timestamp: 1 },
+      { id: 4, name: "paintWalls", args: { id: PROPERTY }, timestamp: 1_000 },
+    ];
+    const result = await push({
+      clientId: DEVICE_A,
+      mutations: [createProperty, ...invalid, { ...createLevel, id: 5 }],
+    });
+
+    expect(result).toEqual({ lastMutationId: 5, version: 2, changed: true });
+    const { changes } = await pull(DEVICE_A, 0);
+    expect(changes.properties.map((property) => property.name)).toEqual(["12 rue des Lilas"]);
+    expect(changes.levels.map((level) => level.id)).toEqual([RDC]);
+  });
+
+  it("rejects a mutation the database refuses (SQLSTATE class 23) as permanent", async () => {
+    // A rule only the database knows about, standing for any constraint the schemas cannot see.
+    await db.exec(
+      "ALTER TABLE properties ADD CONSTRAINT test_no_villa CHECK (name <> 'Villa interdite')",
+    );
+    const result = await push({
       clientId: DEVICE_A,
       mutations: [
-        // Valid for the schema, but PostgreSQL text cannot contain NUL characters.
-        mutation(1, { name: "createProperty", args: { id: PROPERTY, name: "Maison\u0000" } }),
+        mutation(1, { name: "createProperty", args: { id: PROPERTY, name: "Villa interdite" } }),
         mutation(2, { name: "createProperty", args: { id: newId(), name: "Appartement" } }),
       ],
     });
@@ -141,9 +177,33 @@ describe("push and pull", () => {
     expect(changes.properties.map((property) => property.name)).toEqual(["Appartement"]);
   });
 
+  it("accepts gaps in mutation ids: they only have to increase", async () => {
+    // Devices allocate ids with an IndexedDB key generator, which can skip values.
+    const sparse = [
+      { ...createProperty, id: 3 },
+      { ...createLevel, id: 7 },
+      { ...createSpace, id: 20 },
+    ];
+    expect(await push({ clientId: DEVICE_A, mutations: sparse })).toEqual({
+      lastMutationId: 20,
+      version: 3,
+      changed: true,
+    });
+
+    // Retrying the batch, plus a new mutation further on, applies only the new one.
+    const rename = mutation(42, { name: "renameSpace", args: { id: KITCHEN, name: "Cellier" } });
+    expect(await push({ clientId: DEVICE_A, mutations: [...sparse, rename] })).toEqual({
+      lastMutationId: 42,
+      version: 4,
+      changed: true,
+    });
+    const { changes } = await pull(DEVICE_A, 0);
+    expect(changes.spaces).toEqual([expect.objectContaining({ id: KITCHEN, name: "Cellier" })]);
+  });
+
   it("does not bump the version for a mutation that changes nothing", async () => {
-    await processPush(db, { clientId: DEVICE_A, mutations: seed });
-    const deleted = await processPush(db, {
+    await push({ clientId: DEVICE_A, mutations: seed });
+    const deleted = await push({
       clientId: DEVICE_A,
       mutations: [
         mutation(4, { name: "deleteSpace", args: { id: KITCHEN } }),
@@ -155,13 +215,13 @@ describe("push and pull", () => {
   });
 
   it("lets an edit win over a concurrent delete", async () => {
-    await processPush(db, { clientId: DEVICE_A, mutations: seed });
-    await processPush(db, {
+    await push({ clientId: DEVICE_A, mutations: seed });
+    await push({
       clientId: DEVICE_A,
       mutations: [mutation(4, { name: "deleteLevel", args: { id: RDC } }, 2_000)],
     });
     // Device B, offline, still saw the level and renamed one of its rooms.
-    await processPush(db, {
+    await push({
       clientId: DEVICE_B,
       mutations: [
         mutation(1, { name: "renameSpace", args: { id: KITCHEN, name: "Cuisine ouverte" } }),
@@ -174,8 +234,8 @@ describe("push and pull", () => {
   });
 
   it("reports each device's own lastMutationId", async () => {
-    await processPush(db, { clientId: DEVICE_A, mutations: seed });
-    await processPush(db, {
+    await push({ clientId: DEVICE_A, mutations: seed });
+    await push({
       clientId: DEVICE_B,
       mutations: [mutation(7, { name: "renameProperty", args: { id: PROPERTY, name: "Villa" } })],
     });
@@ -185,8 +245,38 @@ describe("push and pull", () => {
     expect((await pull(newId(), 0)).lastMutationId).toBe(0);
   });
 
+  it("processes nothing for a device whose data comes from another epoch", async () => {
+    await push({ clientId: DEVICE_A, epoch, mutations: [createProperty] });
+    // The database is replaced: restoring a backup draws a new epoch, as migration 002 asks.
+    const previous = epoch;
+    await db.exec("UPDATE server_meta SET epoch = gen_random_uuid()");
+    ({ epoch } = onlyRow(await db.query<{ epoch: string }>("SELECT epoch FROM server_meta")));
+    expect(epoch).not.toBe(previous);
+
+    // Still on the previous epoch: refused as a whole, and told the current one (by `push`).
+    expect(await push({ clientId: DEVICE_A, epoch: previous, mutations: [createLevel] })).toEqual({
+      lastMutationId: 1,
+      version: 1,
+      changed: false,
+    });
+    expect((await pull(DEVICE_A, 0)).changes.levels).toEqual([]);
+
+    // Once the device has started over from this epoch, its mutations go through again.
+    expect(await push({ clientId: DEVICE_A, epoch, mutations: [createLevel] })).toEqual({
+      lastMutationId: 2,
+      version: 2,
+      changed: true,
+    });
+    // A device that never pulled has no epoch to send, nor anything to start over from.
+    const other = mutation(1, { name: "createProperty", args: { id: newId(), name: "Villa" } });
+    expect(await push({ clientId: DEVICE_B, mutations: [other] })).toMatchObject({
+      lastMutationId: 1,
+      changed: true,
+    });
+  });
+
   it("resends everything with reset when the cursor is ahead of the server", async () => {
-    await processPush(db, { clientId: DEVICE_A, mutations: seed });
+    await push({ clientId: DEVICE_A, mutations: seed });
 
     const fromScratch = await pull(DEVICE_A, 0);
     expect(await pull(DEVICE_A, 42)).toEqual({ ...fromScratch, reset: true });
@@ -214,7 +304,7 @@ describe("push and pull", () => {
         cursor = response.cursor;
       }
     })();
-    const results = await Promise.all(batches.map((batch) => processPush(db, batch)));
+    const results = await Promise.all(batches.map((batch) => push(batch)));
     await puller;
 
     expect(results.map((result) => result.lastMutationId)).toEqual([5, 5, 5, 5]);

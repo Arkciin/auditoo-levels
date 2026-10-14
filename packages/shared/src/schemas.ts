@@ -5,11 +5,32 @@ export const NAME_MAX_LENGTH = 80;
 
 export const idSchema = z.uuid();
 
+/**
+ * Control characters (Unicode category Cc: C0, DEL and C1). None belongs in a name: they are
+ * invisible or break the layout, and PostgreSQL refuses NUL in text outright.
+ */
+const CONTROL_CHARACTER = /\p{Cc}/u;
+
+/**
+ * A name typed by a user. Surrounding whitespace (line breaks included) is trimmed; control
+ * characters left inside, typically from a paste, are refused.
+ */
 export const nameSchema = z
   .string()
   .trim()
   .min(1, "Le nom est obligatoire")
-  .max(NAME_MAX_LENGTH, `Le nom ne doit pas dépasser ${NAME_MAX_LENGTH} caractères`);
+  .max(NAME_MAX_LENGTH, `Le nom ne doit pas dépasser ${NAME_MAX_LENGTH} caractères`)
+  .refine(
+    (name) => !CONTROL_CHARACTER.test(name),
+    "Le nom contient des caractères invisibles non autorisés (retour à la ligne, tabulation…)",
+  );
+
+/**
+ * A name read back from the server. Deliberately looser than `nameSchema`, which validates input:
+ * input rules may tighten over time, and a row saved under older rules must keep syncing (a pull
+ * rejected because of one legacy row would block the device for good).
+ */
+const storedNameSchema = z.string();
 
 export const positionSchema = z.string().refine(isValidPosition, "Invalid fractional index");
 
@@ -19,7 +40,7 @@ export const timestampSchema = z.number().int().nonnegative();
 /** A housing unit being inspected (flat, house…). Groups levels. */
 export const propertySchema = z.object({
   id: idSchema,
-  name: nameSchema,
+  name: storedNameSchema,
   createdAt: timestampSchema,
   /** Soft-delete marker. Deleted rows are kept so that deletes sync and can be undone. */
   deletedAt: timestampSchema.nullable(),
@@ -30,7 +51,7 @@ export type Property = z.infer<typeof propertySchema>;
 export const levelSchema = z.object({
   id: idSchema,
   propertyId: idSchema,
-  name: nameSchema,
+  name: storedNameSchema,
   position: positionSchema,
   deletedAt: timestampSchema.nullable(),
 });
@@ -40,7 +61,7 @@ export type Level = z.infer<typeof levelSchema>;
 export const spaceSchema = z.object({
   id: idSchema,
   levelId: idSchema,
-  name: nameSchema,
+  name: storedNameSchema,
   position: positionSchema,
   deletedAt: timestampSchema.nullable(),
 });

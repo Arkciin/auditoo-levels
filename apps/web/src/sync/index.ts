@@ -25,6 +25,7 @@ export {
   type MutationDraft,
   type OpenSyncStorageOptions,
   openSyncStorage,
+  StorageClosedError,
   type StoredState,
   type SyncStorage,
 } from "./storage";

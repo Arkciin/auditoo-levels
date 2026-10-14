@@ -1,13 +1,18 @@
 import { MAX_MUTATIONS_PER_PUSH, MutationRejectedError } from "@repo/shared";
 import { IDBFactory } from "fake-indexeddb";
+import { wrap } from "idb";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { describeMutationError } from "./describe";
+import { DEFAULT_DATABASE_NAME, openSyncStorage, StorageClosedError } from "./storage";
 import { retryDelay, type SyncClient } from "./sync-client";
 import {
+  closeLikeTheBrowser,
   type DeviceOptions,
   deferred,
   MemoryServer,
   MemoryTransport,
   openTestClient,
+  RecordingIDBFactory,
   rowsOf,
   type TestClientOptions,
   TestDevice,
@@ -32,7 +37,7 @@ afterEach(async () => {
 
 async function createDevice(server: MemoryServer, options?: DeviceOptions): Promise<TestDevice> {
   const device = await TestDevice.create(server, options);
-  cleanups.push(() => device.client.dispose());
+  cleanups.push(() => device.close());
   return device;
 }
 
@@ -229,6 +234,31 @@ describe("SyncClient", () => {
     expect(client.getState()).toBe(before);
     await client.syncNow(); // Pushes whatever the outbox holds: nothing.
     expect(transport.pushes).toEqual([]);
+  });
+
+  it("gets past a queued mutation that today's rules refuse (from an older version)", async () => {
+    const server = new MemoryServer();
+    const indexedDB = new IDBFactory();
+    // An older version of the app allowed tabs in names, and queued this rename offline.
+    const older = await openSyncStorage({ indexedDB });
+    const tab = String.fromCodePoint(0x09);
+    await older.enqueue({ name: "createProperty", args: { id: P1, name: "Maison" }, timestamp: 1 });
+    await older.enqueue({
+      name: "renameProperty",
+      args: { id: P1, name: `Mai${tab}son` },
+      timestamp: 2,
+    });
+    await older.enqueue({ name: "createProperty", args: { id: P2, name: "Villa" }, timestamp: 3 });
+    older.close();
+    const client = await createClient({ indexedDB, transport: new MemoryTransport(server) });
+
+    await client.syncNow();
+
+    // Rejected on its own: the mutations around it went through, and the queue is empty.
+    expect(server.rejected.map((mutation) => mutation.id)).toEqual([2]);
+    expect(client.getState().pending).toEqual([]);
+    expect(rowsOf(client.getState().view)).toEqual(rowsOf(server.snapshot()));
+    expect(client.getState().view.properties.get(P1)?.name).toBe("Maison");
   });
 
   it("rejects invalid arguments with the schema's French message, and queues nothing", async () => {
@@ -475,6 +505,145 @@ describe("SyncClient", () => {
       expect(server.rejected).toEqual([]);
       expect(rowsOf(tabB.getState().view)).toEqual(rowsOf(server.snapshot()));
     });
+  });
+});
+
+describe("when the server's database is replaced", () => {
+  // Starting over is logged on purpose; keep the test output clean.
+  const warn = () => vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  it("starts over from the new database, even once its version passed the cursor", async () => {
+    warn();
+    const server = new MemoryServer();
+    const device = await createDevice(server);
+    await device.client.mutate("createProperty", { id: P1, name: "Disparu avec l'ancienne base" });
+    await device.client.syncNow();
+    const { cursor } = await device.storedState();
+
+    server.wipe();
+    // Another device fills the new database: `cursor > version` can no longer reveal the change.
+    const other = await createDevice(server);
+    for (let n = 0; n <= cursor; n++) {
+      await other.client.mutate("createProperty", { id: uuid(100 + n), name: `Logement ${n}` });
+    }
+    await other.client.syncNow();
+    expect(server.currentVersion).toBeGreaterThan(cursor);
+
+    await device.client.mutate("createProperty", { id: P2, name: "Créé hors ligne" });
+    await device.client.syncNow();
+
+    const state = device.client.getState();
+    expect(rowsOf(state.view)).toEqual(rowsOf(server.snapshot()));
+    expect(state.view.properties.has(P1)).toBe(false); // Gone with the old database.
+    expect(state.view.properties.get(P2)?.name).toBe("Créé hors ligne"); // Pushed again.
+    expect(state.pending).toEqual([]);
+    expect((await device.storedState()).epoch).toBe(server.epoch);
+  });
+
+  it.each([
+    ["a device that has synced before", true],
+    ["a device that never pulled", false],
+  ])(
+    "never lets the new database skip mutations the old one acknowledged (%s)",
+    async (_, syncedBefore) => {
+      warn();
+      const server = new MemoryServer();
+      const network = new MemoryTransport(server);
+      let losePulls = false;
+      const transport: Transport = {
+        push: (request) => network.push(request),
+        pull: async (request) => {
+          if (losePulls) throw new NetworkError("Simulated network: pull lost");
+          return network.pull(request);
+        },
+      };
+      const client = await createClient({ indexedDB: new IDBFactory(), transport });
+      if (syncedBefore) {
+        await client.mutate("createProperty", { id: P1, name: "Maison" });
+        await client.syncNow();
+      }
+      // Pushed and acknowledged, but the pull that would confirm (and prune) them fails.
+      losePulls = true;
+      await client.mutate("createProperty", { id: P2, name: "Appartement" });
+      await client.mutate("renameProperty", { id: P2, name: "Appartement rénové" });
+      await client.syncNow();
+      expect(client.getState().pending).toHaveLength(2);
+
+      server.wipe();
+      losePulls = false;
+      await client.mutate("createProperty", { id: uuid(3), name: "Villa" });
+      await client.syncNow();
+
+      // Had the new database processed "Villa" first, it would have counted the two earlier
+      // mutations as processed, and they would be lost.
+      const names = [...server.snapshot().properties.values()].map((property) => property.name);
+      expect(names.sort()).toEqual(["Appartement rénové", "Villa"]);
+      expect(server.lostMutations).toEqual([]);
+      expect(client.getState().pending).toEqual([]);
+      expect(rowsOf(client.getState().view)).toEqual(rowsOf(server.snapshot()));
+    },
+  );
+
+  it("starts over once when its data predates epochs (installed before they existed)", async () => {
+    const warning = warn();
+    const server = new MemoryServer();
+    const device = await createDevice(server);
+    await device.client.mutate("createProperty", { id: P1, name: "Maison" });
+    await device.client.syncNow();
+    expect(warning).not.toHaveBeenCalled();
+
+    // The previous version of the app stored the same data, without an epoch.
+    await device.restart(async () => {
+      const db = await wrap(device.indexedDB.open(DEFAULT_DATABASE_NAME));
+      await db?.delete("meta", "epoch");
+      db?.close();
+    });
+    expect((await device.storedState()).epoch).toBeNull();
+    await device.client.syncNow();
+    await device.client.syncNow();
+
+    expect(warning).toHaveBeenCalledOnce();
+    expect((await device.storedState()).epoch).toBe(server.epoch);
+    expect(rowsOf(device.client.getState().view)).toEqual(rowsOf(server.snapshot()));
+  });
+});
+
+describe("when the browser closes the device database", () => {
+  it("keeps working: the database reopens transparently", async () => {
+    const server = new MemoryServer();
+    const indexedDB = new RecordingIDBFactory();
+    const client = await createClient({ indexedDB, transport: new MemoryTransport(server) });
+    await client.mutate("createProperty", { id: P1, name: "Maison" });
+
+    closeLikeTheBrowser(indexedDB.lastConnection); // e.g. iOS, while the app was in the background
+    await client.mutate("renameProperty", { id: P1, name: "Villa" });
+    await client.syncNow();
+
+    expect(client.getState().status).toMatchObject({ phase: "idle", pendingCount: 0 });
+    expect(server.snapshot().properties.get(P1)?.name).toBe("Villa");
+  });
+
+  it("asks, in French, to reload once a newer app version took the database over", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const indexedDB = new IDBFactory();
+    const transport = new MemoryTransport(new MemoryServer());
+    const client = await createClient({ indexedDB, transport });
+    const message =
+      "Relevé a été mis à jour dans un autre onglet. Rechargez cette page pour continuer.";
+
+    const newer = await wrap(indexedDB.open(DEFAULT_DATABASE_NAME, 1_000)); // Another tab.
+    newer?.close();
+
+    const error = await client.mutate("createProperty", { id: P1, name: "Maison" }).then(
+      () => undefined,
+      (reason: unknown) => reason,
+    );
+    expect(error).toBeInstanceOf(StorageClosedError);
+    expect(describeMutationError(error)).toBe(message);
+    expect(client.getState().pending).toEqual([]);
+
+    await client.syncNow();
+    expect(client.getState().status).toMatchObject({ phase: "error", lastError: message });
   });
 });
 

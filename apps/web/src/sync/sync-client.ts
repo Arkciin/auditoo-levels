@@ -17,7 +17,9 @@
  *   the server state includes it: failed requests, crashes and restarts never lose one;
  * - state transitions (local mutation, applying a pull, reloading what another tab wrote) are
  *   serialized, so none of them can interleave with another and lose or double-apply a mutation;
- * - one push/pull cycle at a time per device, across tabs (Web Locks).
+ * - one push/pull cycle at a time per device, across tabs (Web Locks);
+ * - when the server's database is replaced (another epoch), the device starts over from the new
+ *   database's data and pushes its pending mutations again, none of them skipped.
  */
 import {
   applyMutation,
@@ -32,7 +34,12 @@ import {
   type Snapshot,
   SnapshotTx,
 } from "@repo/shared";
-import type { MutationDraft, StoredState, SyncStorage } from "./storage";
+import {
+  type MutationDraft,
+  StorageClosedError,
+  type StoredState,
+  type SyncStorage,
+} from "./storage";
 import { HttpError, NetworkError, ProtocolError, type Transport } from "./transport";
 
 /** Sync health, for the UI's status indicator. */
@@ -160,6 +167,8 @@ export class SyncClient {
   private state: SyncState;
   /** Server version `state.base` is up to date with. */
   private cursor: number;
+  /** Epoch of the server database `state.base` comes from, `null` until the first pull. */
+  private epoch: string | null;
   /**
    * Highest mutation id the server is known to have processed: pushing starts after it. Only in
    * memory: after a restart the server's idempotency makes re-sending a few mutations harmless.
@@ -216,6 +225,7 @@ export class SyncClient {
       options.channelName === undefined ? DEFAULT_CHANNEL_NAME : options.channelName;
     this.clientId = stored.clientId;
     this.cursor = stored.cursor;
+    this.epoch = stored.epoch;
     this.state = {
       base: stored.base,
       view,
@@ -402,29 +412,60 @@ export class SyncClient {
   }
 
   private async pushThenPull(): Promise<void> {
+    await this.push();
+    if (await this.pull()) {
+      // The device started over from a new database, which knows none of its pending mutations:
+      // send them right away rather than at the next cycle, then confirm them.
+      await this.push();
+      await this.pull();
+    }
+  }
+
+  private async push(): Promise<void> {
     const signal = this.abortController.signal;
     // Push from storage, not from memory: the tabs of this device share the outbox and the client
     // id, and the server skips ids at or below the last one it processed. Reading the outbox
     // guarantees we never send a mutation before an older one another tab enqueued meanwhile.
     for (;;) {
       const mutations = await this.storage.readOutbox(this.lastAckedId, MAX_MUTATIONS_PER_PUSH);
-      if (mutations.length === 0) break;
+      if (mutations.length === 0) return;
       const response = await this.transport.push(
-        { clientId: this.clientId, mutations },
+        { clientId: this.clientId, epoch: this.epoch ?? undefined, mutations },
         { signal },
       );
       this.networkDown = false;
-      // No progress means the server knows better (e.g. its database was reset): stop and let
-      // the pull reconcile rather than loop forever.
-      if (response.lastMutationId <= this.lastAckedId) break;
+      // Another database answered: it processed nothing, and the pull will start over.
+      if (this.epoch !== null && response.epoch !== this.epoch) return;
+      // A device that has never pulled learns here which database acknowledges its mutations, so
+      // that it notices if another one answers later. (One that synced before epochs existed must
+      // not: its data may come from yet another database, and its pull will start over anyway.)
+      if (this.epoch === null && this.cursor === 0) this.epoch = response.epoch;
+      // No progress means the server knows better: stop and let the pull reconcile rather than
+      // loop forever.
+      if (response.lastMutationId <= this.lastAckedId) return;
       this.lastAckedId = response.lastMutationId;
     }
-    const response = await this.transport.pull(
-      { clientId: this.clientId, cursor: this.cursor },
-      { signal },
-    );
+  }
+
+  /** Pulls and applies the server's changes. Returns true when the device had to start over. */
+  private async pull(): Promise<boolean> {
+    const signal = this.abortController.signal;
+    const request = { clientId: this.clientId, cursor: this.cursor };
+    let response = await this.transport.pull(request, { signal });
     this.networkDown = false;
+    // A device that synced before epochs existed cannot tell where its data comes from either.
+    const startOver = this.epoch === null ? this.cursor > 0 : response.epoch !== this.epoch;
+    if (startOver) {
+      // The server's database is not the one our data comes from (recreated, or restored from a
+      // backup): our cursor means nothing to it, nor do the acknowledgements we got. Start over
+      // from its full state. The outbox stays, to be pushed again from its first mutation.
+      console.warn("The server's database was replaced: resyncing from scratch");
+      this.lastAckedId = 0;
+      const full = await this.transport.pull({ ...request, cursor: 0 }, { signal });
+      response = { ...full, reset: true };
+    }
     await this.transition(() => this.applyPullResponse(response));
+    return startOver;
   }
 
   private async applyPullResponse(response: PullResponse): Promise<void> {
@@ -440,11 +481,13 @@ export class SyncClient {
       nextBase === base && nextPending === pending ? view : await replay(nextBase, nextPending);
     const storageChanged =
       rowsChanged ||
+      response.epoch !== this.epoch ||
       response.cursor !== this.cursor ||
       response.lastMutationId !== this.lastPulledMutationId;
     // Computed first, persisted next, published last: if anything fails, memory and storage
     // still agree on the previous state and the next cycle simply tries again.
     await this.storage.commitPull(response);
+    this.epoch = response.epoch;
     this.cursor = response.cursor;
     this.lastAckedId = response.lastMutationId;
     this.lastPulledMutationId = response.lastMutationId;
@@ -566,6 +609,9 @@ export class SyncClient {
       if (this.disposed) return;
       const stored = await this.storage.loadState();
       const view = await replay(stored.base, stored.pending);
+      // Another tab started over from a new database: what we know was acknowledged no longer is.
+      if (stored.epoch !== this.epoch) this.lastAckedId = 0;
+      this.epoch = stored.epoch;
       this.cursor = stored.cursor;
       this.publish({ base: stored.base, view, pending: stored.pending });
     }).catch((error: unknown) => {
@@ -671,6 +717,7 @@ function describeSyncError(error: unknown): string {
       : `Le serveur a refusé la synchronisation (erreur ${error.status}).`;
   }
   if (error instanceof ProtocolError) return "Le serveur a envoyé une réponse inattendue.";
+  if (error instanceof StorageClosedError) return error.message;
   if (error instanceof Error && error.name === "QuotaExceededError") {
     return "L'appareil n'a plus assez d'espace de stockage pour enregistrer les données reçues.";
   }
