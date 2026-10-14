@@ -1,0 +1,14 @@
+node_modules/
+dist/
+dev-dist/
+coverage/
+.data/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+/apps/web/test-results/
+/apps/web/playwright-report/
+/apps/web/blob-report/
