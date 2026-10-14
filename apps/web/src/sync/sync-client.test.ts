@@ -1,4 +1,4 @@
-import { MAX_MUTATIONS_PER_PUSH, MutationRejectedError } from "@repo/shared";
+import { clientTag, MAX_MUTATIONS_PER_PUSH, MutationRejectedError } from "@repo/shared";
 import { IDBFactory } from "fake-indexeddb";
 import { wrap } from "idb";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -73,6 +73,16 @@ class FakeEventSource extends EventTarget {
   close() {
     this.readyState = FakeEventSource.CLOSED;
   }
+}
+
+/** A `poke` server-sent event, as the server writes it. */
+function poke(version: number, clientTag?: string): MessageEvent {
+  return new MessageEvent("poke", { data: JSON.stringify({ version, clientTag }) });
+}
+
+/** Lets a sync started now (or not) run its course, IndexedDB included. */
+function settle(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 20));
 }
 
 /** `document` stand-in, whose visibility tests set themselves. */
@@ -225,9 +235,11 @@ describe("SyncClient", () => {
     expect(server.snapshot().properties.has(P1)).toBe(true);
   });
 
-  it.each<[string, (fakes: { events: FakeEventSource; page: FakePage }) => void]>([
+  it.each<[string, (fakes: { events: FakeEventSource; page: FakePage; tag: string }) => void]>([
     ["the event stream reconnects", ({ events }) => events.dispatchEvent(new Event("open"))],
     ["the server pokes", ({ events }) => events.dispatchEvent(new Event("poke"))],
+    // Its own push went through, but the answer was lost: the server is reachable after all.
+    ["the server pokes for its own push", ({ events, tag }) => events.dispatchEvent(poke(1, tag))],
     [
       "the page shows again",
       ({ page }) => {
@@ -250,10 +262,38 @@ describe("SyncClient", () => {
     expect(transport.attempts).toBe(1);
 
     transport.mode = "online";
-    signal({ events: FakeEventSource.last(), page });
+    signal({ events: FakeEventSource.last(), page, tag: await clientTag(client.clientId) });
 
     await waitForState(client, (s) => s.status.pendingCount === 0);
     expect(server.snapshot().properties.has(P1)).toBe(true);
+  });
+
+  it("does not pull for the poke of its own push, but does for any other", async () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const server = new MemoryServer();
+    const { client, transport } = await createDevice(server, { eventsUrl: "/api/events" });
+    client.start();
+    const events = FakeEventSource.last();
+    await client.mutate("createProperty", { id: P1, name: "Maison" }); // Pushed, then pulled.
+    await waitForState(client, (s) => s.status.pendingCount === 0 && s.status.phase === "idle");
+    await settle();
+    const attempts = transport.attempts;
+
+    // The server pokes every connected device after a push, the pusher included.
+    events.dispatchEvent(poke(1, await clientTag(client.clientId)));
+    await settle();
+    expect(transport.attempts).toBe(attempts);
+
+    for (const other of [
+      poke(2, await clientTag(uuid(999))), // another device's push
+      poke(3), // a server older than tags
+      new MessageEvent("poke", { data: "not JSON" }),
+    ]) {
+      const before = transport.attempts;
+      events.dispatchEvent(other);
+      await settle();
+      expect(transport.attempts).toBe(before + 1); // a pull
+    }
   });
 
   it("retries at once, ignoring the backoff, when the network comes back mid-attempt", async () => {
@@ -578,6 +618,37 @@ describe("SyncClient", () => {
       await tabB.syncNow(); // Tab B pushes tab A's mutation: the outbox is shared.
       expect(server.snapshot().properties.has(P1)).toBe(true);
       await waitForState(tabA, (s) => s.pending.length === 0 && s.base.properties.has(P1));
+    });
+
+    it("hears of another tab's push over the BroadcastChannel, not by pulling on its poke", async () => {
+      vi.stubGlobal("EventSource", FakeEventSource);
+      const server = new MemoryServer();
+      const indexedDB = new IDBFactory();
+      const channelName = `releve-sync-test-${crypto.randomUUID()}`;
+      const options = { indexedDB, channelName, eventsUrl: "/api/events" };
+      const transportA = new MemoryTransport(server);
+      const transportB = new MemoryTransport(server);
+      const tabA = await createClient({ ...options, transport: transportA });
+      const tabB = await createClient({ ...options, transport: transportB });
+      tabA.start();
+      const eventsA = FakeEventSource.last();
+      tabB.start();
+      const eventsB = FakeEventSource.last();
+      await waitForState(tabB, (s) => s.status.lastSyncedAt !== null);
+      await settle();
+      const attemptsB = transportB.attempts;
+
+      await tabA.mutate("createProperty", { id: P1, name: "Maison" }); // Pushed, then pulled.
+      await waitForState(tabA, (s) => s.status.pendingCount === 0 && s.status.phase === "idle");
+      // The server pokes both tabs, which share the client id: the poke is their device's.
+      const own = poke(1, await clientTag(tabA.clientId));
+      eventsA.dispatchEvent(own);
+      eventsB.dispatchEvent(own);
+
+      // Tab B shows the change saved, from the storage tab A wrote, without asking the server.
+      await waitForState(tabB, (s) => s.base.properties.has(P1) && s.pending.length === 0);
+      await settle();
+      expect(transportB.attempts).toBe(attemptsB);
     });
 
     it("never pushes a mutation before an older one enqueued by another tab", async () => {

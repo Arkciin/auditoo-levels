@@ -112,8 +112,13 @@ The model is Replicache's (push, pull, rebase), written as plain, readable TypeS
 ```text
 POST /api/push  { clientId, epoch?, mutations: [{ id, name, args, timestamp }] }  →  { lastMutationId, epoch, rejected: [{ id, reason }] }
 POST /api/pull  { clientId, cursor }  →  { epoch, cursor, lastMutationId, reset, changes: { properties, levels, spaces } }
-GET  /api/events    server-sent events: "poke" { version } after each push that changed data
+GET  /api/events    server-sent events: "poke" { version, clientTag } after each push that changed data
 ```
+
+A poke names the device that pushed by `clientTag`, the start of its client id's SHA-256: that
+device skips it, since it pulls right after pushing. Not the id itself: anyone can listen to the
+stream, and a client id is all it takes to push as a device (a forged high mutation id would make
+the server skip that device's later changes). Installed apps ignore the field.
 
 ### Isomorphic mutators
 
@@ -237,7 +242,7 @@ pas pu être déplacée vers « R+1 » : le niveau n'existe plus. ».
 | Trigger | Behaviour |
 | --- | --- |
 | A local mutation | Sync now; while a retry is scheduled, wait for it: the mutation is safe in the outbox, and says nothing about the network |
-| An SSE `poke`, every (re)connection of the stream (pokes sent meanwhile are lost), the page becoming visible | Sync now, even while backing off: the server just proved reachable, or the user is back |
+| An SSE `poke`, every (re)connection of the stream (pokes sent meanwhile are lost), the page becoming visible | Sync now, even while backing off: the server just proved reachable, or the user is back. Not for the poke of the device's own push, unless backing off: its other tabs hear of it over the BroadcastChannel |
 | `online` event, "Synchroniser maintenant" button | Sync now and reset the backoff |
 | Every 30 s while the page is visible | Sync, unless a retry is already scheduled; reopen the event stream if it gave up |
 | A failed cycle | Retry after 1 s, doubling up to 30 s, ±20 % jitter so devices cut off together do not retry in lockstep |

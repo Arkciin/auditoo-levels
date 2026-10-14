@@ -140,6 +140,40 @@ export const pushResponseSchema = z.object({
 });
 export type PushResponse = z.infer<typeof pushResponseSchema>;
 
+/**
+ * The `poke` event the server sends to every connected device after a push that changed data.
+ * Devices only use it as a signal to pull, and ignore what they do not know: fields can be added.
+ */
+export interface Poke {
+  /** The server version after the push. */
+  readonly version: number;
+  /** {@link clientTag} of the device that pushed (absent from servers older than the field). */
+  readonly clientTag?: string;
+}
+
+/** WebCrypto's digest, which browsers (in secure contexts) and Node both provide. */
+interface Digest {
+  digest(algorithm: "SHA-256", data: Uint8Array): Promise<ArrayBuffer>;
+}
+
+/**
+ * Names the device behind a poke without disclosing its client id: the first 16 bytes of the
+ * id's SHA-256, in hex. A device skips the pokes of its own pushes (it pulls right after pushing
+ * anyway). Not the id itself: anyone can listen to the event stream, and a client id is all it
+ * takes to push as that device; a forged push with a high mutation id would make the server skip
+ * that device's later changes, silently and for good. Rejects where WebCrypto is unavailable
+ * (a page served over plain HTTP from another host than localhost).
+ */
+export async function clientTag(clientId: string): Promise<string> {
+  // Typing boundary: this package builds without DOM or Node typings, both runtimes have it.
+  const subtle = (globalThis as { crypto?: { subtle?: Digest } }).crypto?.subtle;
+  if (!subtle) throw new Error("WebCrypto is unavailable");
+  // Client ids are UUIDs: ASCII.
+  const bytes = Uint8Array.from(clientId, (character) => character.charCodeAt(0));
+  const digest = new Uint8Array(await subtle.digest("SHA-256", bytes));
+  return Array.from(digest.subarray(0, 16), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 export const pullRequestSchema = z.object({
   clientId: idSchema,
   /** Server version the device is up to date with (0 = nothing yet). */

@@ -2,6 +2,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import { z } from "zod";
 import { type MutationArgs, mutationNames } from "./mutators";
 import {
+  clientTag,
   MAX_MUTATIONS_PER_PUSH,
   type Mutation,
   type MutationEnvelope,
@@ -83,6 +84,16 @@ describe("mutationSchema", () => {
       MutationArgs<"moveSpace">
     >();
     expectTypeOf<Mutation["name"]>().toEqualTypeOf<(typeof mutationNames)[number]>();
+  });
+});
+
+describe("clientTag", () => {
+  it("is the start of the client id's SHA-256: the same on every runtime, one-way", async () => {
+    // sha256("0199f0a0-0000-7000-8000-0000000000a1"), first 16 bytes.
+    expect(await clientTag(CLIENT)).toBe("6daa395c5c800d178a977ea580c5fc97");
+    expect(await clientTag("0199f0a0-0000-7000-8000-0000000000a2")).not.toBe(
+      await clientTag(CLIENT),
+    );
   });
 });
 

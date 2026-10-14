@@ -27,6 +27,7 @@ import {
   applyMutation,
   applyMutations,
   applyPull,
+  clientTag,
   MAX_MUTATIONS_PER_PUSH,
   type Mutation,
   type MutationArgs,
@@ -285,14 +286,22 @@ export class SyncClient {
   static async create(options: SyncClientOptions): Promise<SyncClient> {
     const stored = await options.storage.loadState();
     const { view, refused } = await replay(stored.base, stored.pending);
-    const client = new SyncClient(options, stored, view);
+    // Without WebCrypto (plain HTTP from another host than localhost), every poke counts as
+    // another device's: one pull too many after each push, as before pokes named their pusher.
+    const tag = await clientTag(stored.clientId).catch(() => null);
+    const client = new SyncClient(options, stored, view, tag);
     // Queued changes that no longer apply (reported in an earlier session, most likely): listed
     // in the state, but nobody listens to `onRejected` yet, so no toast for old news.
     await client.reportRefusals(refused, stored);
     return client;
   }
 
-  private constructor(options: SyncClientOptions, stored: StoredState, view: Snapshot) {
+  private constructor(
+    options: SyncClientOptions,
+    stored: StoredState,
+    view: Snapshot,
+    private readonly tag: string | null,
+  ) {
     this.storage = options.storage;
     this.transport = options.transport;
     this.now = options.now ?? Date.now;
@@ -876,7 +885,17 @@ export class SyncClient {
     this.requestSync("routine");
   };
 
-  private readonly handlePoke = (): void => {
+  private readonly handleStreamOpen = (): void => {
+    this.requestSync("signal");
+  };
+
+  private readonly handlePoke = (event: Event): void => {
+    // A push from this device caused it (from this tab or another: they share the client id).
+    // The pushing cycle pulls right after its push, and tells the other tabs over the
+    // BroadcastChannel: no pull for it. Unless this tab is waiting out a failure: the poke then
+    // proves the server reachable, like any other.
+    const own = this.tag !== null && pokeTag(event) === this.tag;
+    if (own && this.retryTimer === undefined) return;
     this.requestSync("signal");
   };
 
@@ -885,7 +904,7 @@ export class SyncClient {
     const events = new EventSource(this.eventsUrl);
     // A poke only says "something changed", and pokes sent while we were not connected are lost:
     // catch up on every (re)connection too.
-    events.addEventListener("open", this.handlePoke);
+    events.addEventListener("open", this.handleStreamOpen);
     events.addEventListener("poke", this.handlePoke);
     this.events = events;
   }
@@ -964,6 +983,22 @@ function isRejection(value: unknown): value is Rejection {
     "at" in value &&
     typeof value.at === "number"
   );
+}
+
+/** The tag of the device whose push caused a poke, if the event carries one (see `Poke`). */
+function pokeTag(event: Event): string | undefined {
+  if (!(event instanceof MessageEvent) || typeof event.data !== "string") return undefined;
+  try {
+    const poke: unknown = JSON.parse(event.data);
+    return typeof poke === "object" &&
+      poke !== null &&
+      "clientTag" in poke &&
+      typeof poke.clientTag === "string"
+      ? poke.clientTag
+      : undefined;
+  } catch {
+    return undefined; // Not ours to judge: any poke is still a reason to pull.
+  }
 }
 
 function hasRows(changes: PullResponse["changes"]): boolean {

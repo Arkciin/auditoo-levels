@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { type PushResponse, pullRequestSchema, pushRequestSchema } from "@repo/shared";
+import { clientTag, type PushResponse, pullRequestSchema, pushRequestSchema } from "@repo/shared";
 import { type Context, Hono, type MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { except } from "hono/combine";
@@ -77,7 +77,8 @@ export function createApp({ db, staticDir, signal }: AppOptions): Hono {
       db,
       request.data,
     );
-    if (changed) pokes.publish(version);
+    // Tagged with the pusher, which skips it: it pulls right after pushing anyway.
+    if (changed) pokes.publish({ version, clientTag: await clientTag(request.data.clientId) });
     return c.json({ lastMutationId, epoch, rejected } satisfies PushResponse);
   });
 
@@ -91,8 +92,8 @@ export function createApp({ db, staticDir, signal }: AppOptions): Hono {
     // Disables response buffering in nginx-like proxies, which would hold pokes back.
     c.header("X-Accel-Buffering", "no");
     return streamSSE(c, async (stream) => {
-      const unsubscribe = pokes.subscribe((version) => {
-        void stream.writeSSE({ event: "poke", data: JSON.stringify({ version }) });
+      const unsubscribe = pokes.subscribe((poke) => {
+        void stream.writeSSE({ event: "poke", data: JSON.stringify(poke) });
       });
       // An SSE comment: ignored by EventSource, but keeps proxies from closing an idle stream.
       const heartbeat = setInterval(

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { brotliCompressSync, brotliDecompressSync, gunzipSync } from "node:zlib";
 import {
+  clientTag,
   MAX_DUPLICATED_SPACES,
   MAX_MUTATIONS_PER_PUSH,
   mutationSchema,
@@ -172,7 +173,7 @@ describe("API", () => {
     expect(await response.json()).toEqual({ error: "not_found" });
   });
 
-  it("pokes connected devices when a push changes data, and ends streams on shutdown", async () => {
+  it("pokes connected devices when a push changes data, naming the pusher, and ends streams on shutdown", async () => {
     const shutdown = new AbortController();
     const app = createApp({ db, signal: shutdown.signal });
 
@@ -180,15 +181,31 @@ describe("API", () => {
     expect(events.headers.get("content-type")).toBe("text/event-stream");
     expect(events.headers.get("cache-control")).toBe("no-cache");
     const stream = readText(events);
+    // Names the pusher, which skips its own pokes, without disclosing its client id: anyone can
+    // listen, and the id is all it takes to push as that device.
+    const tag = await clientTag(DEVICE);
+    expect(tag).toMatch(/^[0-9a-f]{32}$/);
+    const poke = (version: number) =>
+      `event: poke\ndata: ${JSON.stringify({ version, clientTag: tag })}\n\n`;
 
     await post(app, "/api/push", { clientId: DEVICE, mutations: [createProperty] });
-    expect((await stream.read()).value).toBe('event: poke\ndata: {"version":1}\n\n');
+    const first = (await stream.read()).value;
+    expect(first).toBe(poke(1));
+    expect(first).not.toContain(DEVICE);
 
     // A retry changes nothing: no poke for it, so the next one is for version 2.
     await post(app, "/api/push", { clientId: DEVICE, mutations: [createProperty] });
     const rename = mutation(2, { name: "renameProperty", args: { id: PROPERTY, name: "Villa" } });
     await post(app, "/api/push", { clientId: DEVICE, mutations: [rename] });
-    expect((await stream.read()).value).toBe('event: poke\ndata: {"version":2}\n\n');
+    expect((await stream.read()).value).toBe(poke(2));
+    // Another device's push carries another tag.
+    const other = "0199f0a0-0000-7000-8000-0000000000b1";
+    const villa = mutation(1, { name: "renameProperty", args: { id: PROPERTY, name: "Manoir" } });
+    await post(app, "/api/push", { clientId: other, mutations: [villa] });
+    const third = (await stream.read()).value;
+    expect(third).toContain('"version":3');
+    expect(third).not.toContain(tag);
+    expect(third).toContain(await clientTag(other));
 
     shutdown.abort();
     expect((await stream.read()).done).toBe(true);
