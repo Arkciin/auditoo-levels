@@ -122,16 +122,19 @@ export function createApp({ db, staticDir, signal }: AppOptions): Hono {
  * other GET falls back to index.html so that client-side routes survive a reload.
  */
 function serveSpa(app: Hono, root: string): void {
-  app.use("/assets/*", cacheControl(IMMUTABLE), serveStatic({ root }));
+  // The build writes a Brotli copy of each text file (.br): sent as is to browsers that accept it.
+  const serve = (options: { path?: string } = {}) =>
+    serveStatic({ root, precompressed: true, ...options });
+  app.use("/assets/*", cacheControl(IMMUTABLE), serve());
   // A missing hashed asset is a genuine 404 (typically a stale client asking for a chunk of a
   // previous deploy): the SPA fallback would answer with HTML where JavaScript is expected.
   app.get("/assets/*", (c) => c.notFound());
   app.use(
     "*",
     cacheControl("no-cache", (c) => REVALIDATED_PATHS.has(c.req.path)),
-    serveStatic({ root }),
+    serve(),
   );
-  app.get("*", cacheControl("no-cache"), serveStatic({ root, path: "index.html" }));
+  app.get("*", cacheControl("no-cache"), serve({ path: "index.html" }));
 }
 
 /** Sets Cache-Control on the successful responses of the handlers that follow. */

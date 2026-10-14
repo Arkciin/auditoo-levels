@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { brotliCompressSync, brotliDecompressSync, gunzipSync } from "node:zlib";
 import { pullResponseSchema, pushResponseSchema } from "@repo/shared";
 import type { Hono } from "hono";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -189,5 +190,28 @@ describe("web app", () => {
     const api = await app.request("/api/nope");
     expect(api.status).toBe(404);
     expect(await api.json()).toEqual({ error: "not_found" });
+  });
+
+  it("sends the build's Brotli copies to browsers that accept them", async () => {
+    const script = "console.log('app');".repeat(100);
+    await writeFile(join(staticDir, "assets", "app-C3x1.js"), script);
+    await writeFile(join(staticDir, "assets", "app-C3x1.js.br"), brotliCompressSync(script));
+    const app = createApp({ db, staticDir });
+
+    const brotli = await app.request("/assets/app-C3x1.js", {
+      headers: { "Accept-Encoding": "gzip, deflate, br" },
+    });
+    expect(brotli.headers.get("content-encoding")).toBe("br");
+    expect(brotli.headers.get("content-type")).toMatch(/^text\/javascript/);
+    expect(brotli.headers.get("vary")).toMatch(/Accept-Encoding/);
+    expect(brotli.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+    expect(brotliDecompressSync(await brotli.arrayBuffer()).toString()).toBe(script);
+
+    // Without Brotli, the response is compressed on the fly.
+    const gzip = await app.request("/assets/app-C3x1.js", {
+      headers: { "Accept-Encoding": "gzip" },
+    });
+    expect(gzip.headers.get("content-encoding")).toBe("gzip");
+    expect(gunzipSync(await gzip.arrayBuffer()).toString()).toBe(script);
   });
 });

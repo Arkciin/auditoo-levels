@@ -1,4 +1,7 @@
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { brotliCompressSync, constants } from "node:zlib";
 import { serwist } from "@serwist/vite";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
@@ -58,9 +61,38 @@ function preloadHomeScreen(): Plugin {
   };
 }
 
+/**
+ * Writes a Brotli copy next to each text file of the build, compressed once at the highest level:
+ * the server sends it to browsers that accept it (apps/server/src/app.ts). JavaScript comes out
+ * about 13 % smaller than the gzip the server would otherwise compress on the fly for each request.
+ */
+function brotli(): Plugin {
+  return {
+    name: "releve:brotli",
+    apply: "build",
+    async writeBundle({ dir }, bundle) {
+      if (!dir) return;
+      const files = Object.keys(bundle).filter((file) => /\.(?:js|css|html|svg)$/.test(file));
+      for (const file of files) {
+        const path = join(dir, file);
+        const content = await readFile(path);
+        if (content.length < 1024) continue; // not worth a second file
+        const compressed = brotliCompressSync(content, {
+          params: {
+            [constants.BROTLI_PARAM_QUALITY]: constants.BROTLI_MAX_QUALITY,
+            [constants.BROTLI_PARAM_SIZE_HINT]: content.length,
+          },
+        });
+        await writeFile(`${path}.br`, compressed);
+      }
+    },
+  };
+}
+
 export default defineConfig({
   plugins: [
     preloadHomeScreen(),
+    brotli(),
     // Must run before react(): generates src/routeTree.gen.ts and splits each route into its
     // own chunk.
     tanstackRouter({ target: "react", autoCodeSplitting: true }),
