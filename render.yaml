@@ -1,0 +1,29 @@
+# Render Blueprint: one web service (API + static PWA, same origin) and a PostgreSQL database.
+# New → Blueprint → pick this repository. Both run on the free plan in Frankfurt (closest to France).
+services:
+  - type: web
+    name: releve
+    runtime: node
+    plan: free
+    region: frankfurt
+    # pnpm comes from Corepack (pinned by "packageManager" in package.json). Dev dependencies are
+    # needed to build, so NODE_ENV=production is only set at runtime, in the start command.
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm build
+    startCommand: NODE_ENV=production node apps/server/dist/index.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: releve-db
+          property: connectionString
+
+databases:
+  - name: releve-db
+    plan: free
+    region: frankfurt
+    databaseName: releve
+    user: releve
+    # Only reachable from Render's private network (the web service).
+    ipAllowList: []
