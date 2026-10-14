@@ -6,7 +6,7 @@
  * name. The current view is not that state (it already includes the rename): to describe the
  * whole queue, use {@link describePendingMutations}, which walks it from the base.
  */
-import { type Mutation, MutationRejectedError, type Snapshot } from "@repo/shared";
+import { type Mutation, MutationRejectedError, mutationNames, type Snapshot } from "@repo/shared";
 import { StorageClosedError } from "./storage";
 
 type EntityKind = "property" | "level" | "space";
@@ -147,6 +147,8 @@ function describe(mutation: Mutation, names: NameLookup): string {
     case "restoreSpace":
       return `${subject("space", names.space(mutation.args.id)?.name)} restaurée`;
   }
+  // A kind another version of the app queued (see `applyMutation`): the types cannot see it.
+  return "Modification faite avec une autre version de Relevé";
 }
 
 /**
@@ -196,8 +198,14 @@ export function describeRejection(
   reason: string,
   against: Snapshot = before,
 ): string {
+  if (!KNOWN_MUTATIONS.has(mutation.name)) {
+    return "Une modification faite avec une autre version de Relev\u00e9 n'a pas pu \u00eatre appliqu\u00e9e.";
+  }
   return `${notDone(mutation, namesIn(before))}\u00a0: ${why(mutation, reason, against)}.`;
 }
+
+/** What this version knows: an outbox may also hold kinds another version queued. */
+const KNOWN_MUTATIONS: ReadonlySet<string> = new Set(mutationNames);
 
 const THE: Readonly<Record<EntityKind, string>> = {
   property: "Le logement",

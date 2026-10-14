@@ -18,6 +18,7 @@ import { z } from "zod";
 import {
   type MutationContext,
   type MutationName,
+  MutationRejectedError,
   type MutatorTx,
   mutationArgsSchemas,
   mutationNames,
@@ -50,8 +51,17 @@ const envelopes = mutationNames.map((name) => envelope(name)) as [AnyEnvelope, .
 export const mutationSchema = z.discriminatedUnion("name", envelopes);
 export type Mutation = z.infer<typeof mutationSchema>;
 
-/** Runs a mutation's mutator. Callers own the transaction (and its rollback on error). */
+/**
+ * Runs a mutation's mutator. Callers own the transaction (and its rollback on error).
+ *
+ * A mutation of a kind this version does not know is refused like any mutation that cannot apply
+ * (`MutationRejectedError`). The types rule it out, but a device's outbox may hold what another
+ * version of the app wrote: a newer one, then rolled back, or a newer tab next to an older one.
+ */
 export function applyMutation(tx: MutatorTx, mutation: Mutation): Promise<void> {
+  if (!Object.hasOwn(mutators, mutation.name)) {
+    return Promise.reject(new MutationRejectedError(`Unknown mutation ${mutation.name}`));
+  }
   // Sound cast: the discriminated union guarantees `args` matches `name`.
   const run = mutators[mutation.name] as (
     tx: MutatorTx,

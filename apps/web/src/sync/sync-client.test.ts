@@ -2,8 +2,13 @@ import { MAX_MUTATIONS_PER_PUSH, MutationRejectedError } from "@repo/shared";
 import { IDBFactory } from "fake-indexeddb";
 import { wrap } from "idb";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { describeMutationError } from "./describe";
-import { DEFAULT_DATABASE_NAME, openSyncStorage, StorageClosedError } from "./storage";
+import { describeMutationError, describePendingMutations } from "./describe";
+import {
+  DEFAULT_DATABASE_NAME,
+  type MutationDraft,
+  openSyncStorage,
+  StorageClosedError,
+} from "./storage";
 import { MAX_RECENT_REJECTIONS, type Rejection, retryDelay, type SyncClient } from "./sync-client";
 import {
   closeLikeTheBrowser,
@@ -689,6 +694,38 @@ describe("changes that do not apply", () => {
     ]);
     expect(server.rejected).toHaveLength(1);
     expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("starts with a queued mutation of a kind it does not know (from a newer version)", async () => {
+    // A newer version queued it offline, then the app was rolled back; or an older tab is still
+    // open while a newer one works. Its replay must not stop this version from starting.
+    const server = new MemoryServer();
+    const indexedDB = new IDBFactory();
+    const newer = await openSyncStorage({ indexedDB });
+    await newer.enqueue({ name: "createProperty", args: { id: P1, name: "Maison" }, timestamp: 1 });
+    const unknown = { name: "paintWalls", args: { id: P1, colour: "vert" }, timestamp: 2 };
+    // Typing boundary: what another version of the app wrote to the outbox.
+    await newer.enqueue(unknown as unknown as MutationDraft);
+    newer.close();
+
+    const client = await createClient({ indexedDB, transport: new MemoryTransport(server) });
+
+    expect(client.getState().view.properties.get(P1)?.name).toBe("Maison");
+    expect(client.getState().rejections).toEqual([
+      expect.objectContaining({
+        mutationId: 2,
+        message:
+          "Une modification faite avec une autre version de Relevé n'a pas pu être appliquée.",
+      }),
+    ]);
+    expect(describePendingMutations(client.getState().base, client.getState().pending)).toEqual([
+      french("Logement « Maison » créé"),
+      "Modification faite avec une autre version de Relevé",
+    ]);
+    await client.syncNow(); // The server, which does not know it either, rejects it as invalid.
+    expect(server.rejected.map((mutation) => mutation.id)).toEqual([2]);
+    expect(client.getState().pending).toEqual([]);
+    expect(rowsOf(client.getState().view)).toEqual(rowsOf(server.snapshot()));
   });
 
   it(`keeps the latest ${MAX_RECENT_REJECTIONS} rejections, newest first`, async () => {

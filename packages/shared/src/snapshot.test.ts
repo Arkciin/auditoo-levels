@@ -30,6 +30,27 @@ describe("applyMutations", () => {
     // The state just before it: the first mutation applied, not the third.
     expect(before.properties.get(property.id)?.name).toBe("Maison");
   });
+
+  it("refuses a mutation of a kind this version does not know, instead of failing", async () => {
+    const create: Mutation = {
+      id: 1,
+      timestamp: 1,
+      name: "createProperty",
+      args: { id: property.id, name: "Maison" },
+    };
+    // Typing boundary: what a newer version of the app may have left in a device's outbox.
+    const unknown = { id: 2, timestamp: 1, name: "paintWalls", args: {} } as unknown as Mutation;
+    const onRejected = vi.fn();
+
+    const after = await applyMutations(emptySnapshot, [create, unknown], onRejected);
+
+    expect(after.properties.has(property.id)).toBe(true);
+    expect(onRejected).toHaveBeenCalledExactlyOnceWith(
+      unknown,
+      expect.any(MutationRejectedError),
+      after,
+    );
+  });
 });
 
 describe("applyPull", () => {
