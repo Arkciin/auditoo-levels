@@ -167,6 +167,7 @@ function SyncDetails() {
   const now = useNow(CLOCK_TICK_MS);
   const presentation = presentStatus(status);
   const descriptions = describePendingMutations(base, pending);
+  const notApplied = new Set(rejections.map((rejection) => rejection.mutationId));
 
   // The sheet lists them: their toasts would only cover the list.
   useEffect(() => {
@@ -188,16 +189,22 @@ function SyncDetails() {
           </h3>
           {descriptions.length > 0 ? (
             <ol className="border-t border-rule">
-              {descriptions.map((description, index) => (
-                <li
-                  // Descriptions are not unique and the list is append-only: the index is stable.
-                  // biome-ignore lint/suspicious/noArrayIndexKey: see above
-                  key={index}
-                  className="border-b border-rule py-2.5 text-sm"
-                >
-                  {description}
-                </li>
-              ))}
+              {pending.map((mutation, index) => {
+                // Still queued, for the server to settle, but listed below as not applied.
+                const stale = notApplied.has(mutation.id);
+                return (
+                  <li
+                    key={mutation.id}
+                    className={cn(
+                      "border-b border-rule py-2.5 text-sm",
+                      stale && "text-muted-foreground",
+                    )}
+                  >
+                    {descriptions[index]}
+                    {stale ? "\u00a0— ne s’applique plus" : null}
+                  </li>
+                );
+              })}
             </ol>
           ) : null}
         </section>
