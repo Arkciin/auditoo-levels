@@ -146,9 +146,18 @@ function describe(mutation: Mutation, names: NameLookup): string {
       return `${subject("space", names.space(mutation.args.id)?.name)} supprimée`;
     case "restoreSpace":
       return `${subject("space", names.space(mutation.args.id)?.name)} restaurée`;
+    default:
+      return unknownKind(mutation, "Modification faite avec une autre version de Relevé");
   }
-  // A kind another version of the app queued (see `applyMutation`): the types cannot see it.
-  return "Modification faite avec une autre version de Relevé";
+}
+
+/**
+ * The `default` of a switch over mutation kinds. TypeScript still requires a case for every kind
+ * of this version (`mutation` must have narrowed to `never`), while at runtime a kind another
+ * version queued (see `applyMutation`) gets `fallback`.
+ */
+function unknownKind<T>(_mutation: never, fallback: T): T {
+  return fallback;
 }
 
 /**
@@ -330,6 +339,8 @@ function missingEntity(mutation: Mutation, state: Snapshot): string | undefined 
       }
       return property(target.propertyId);
     }
+    default:
+      return unknownKind(mutation, undefined);
   }
 }
 
