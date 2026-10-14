@@ -233,6 +233,85 @@ describe("push and pull", () => {
     expect(changes.spaces).toEqual([expect.objectContaining({ name: "Cuisine ouverte" })]);
   });
 
+  describe("duplicating a level", () => {
+    const COPY = "0199f0a0-0000-7000-8000-000000000012";
+    const COPIED_KITCHEN = "0199f0a0-0000-7000-8000-000000000031";
+    const COPIED_WC = "0199f0a0-0000-7000-8000-000000000032";
+    const WC = "0199f0a0-0000-7000-8000-000000000022";
+    const createWc = mutation(4, {
+      name: "createSpace",
+      args: { id: WC, levelId: RDC, name: "WC", position: "a1" },
+    });
+    const duplicate = (id: number, wcName = "WC") =>
+      mutation(id, {
+        name: "duplicateLevel",
+        args: {
+          id: COPY,
+          sourceId: RDC,
+          name: "RDC (copie)",
+          position: "a0V",
+          spaces: [
+            { id: COPIED_KITCHEN, name: "Cuisine", position: "a0" },
+            { id: COPIED_WC, name: wcName, position: "a1" },
+          ],
+        },
+      });
+
+    it("writes the copy and its rooms in one mutation, under one version", async () => {
+      const mutations = [...seed, createWc, duplicate(5)];
+      expect(await push({ clientId: DEVICE_A, mutations })).toEqual({
+        lastMutationId: 5,
+        version: 5,
+        changed: true,
+      });
+
+      const { changes } = await pull(DEVICE_A, 4);
+      expect(changes).toEqual({
+        properties: [],
+        levels: [
+          { id: COPY, propertyId: PROPERTY, name: "RDC (copie)", position: "a0V", deletedAt: null },
+        ],
+        spaces: [
+          { id: COPIED_KITCHEN, levelId: COPY, name: "Cuisine", position: "a0", deletedAt: null },
+          { id: COPIED_WC, levelId: COPY, name: "WC", position: "a1", deletedAt: null },
+        ],
+      });
+      // The device computed exactly the same rows optimistically.
+      const everything = await pull(DEVICE_A, 0);
+      expect(applyPull(emptySnapshot, everything)).toEqual(
+        await applyMutations(emptySnapshot, mutations),
+      );
+
+      // A retry (the response was lost) creates nothing more.
+      expect(await push({ clientId: DEVICE_A, mutations })).toEqual({
+        lastMutationId: 5,
+        version: 5,
+        changed: false,
+      });
+    });
+
+    it("writes none of it when the database refuses one of its rooms", async () => {
+      // A rule only the database knows about, standing for any constraint the schemas cannot see.
+      await db.exec("ALTER TABLE spaces ADD CONSTRAINT test_no_attic CHECK (name <> 'Grenier')");
+      const rename = mutation(6, {
+        name: "renameLevel",
+        args: { id: RDC, name: "Rez-de-chaussée" },
+      });
+      const result = await push({
+        clientId: DEVICE_A,
+        mutations: [...seed, createWc, duplicate(5, "Grenier"), rename],
+      });
+
+      // Rejected but acknowledged, so the mutation after it went through.
+      expect(result).toEqual({ lastMutationId: 6, version: 5, changed: true });
+      const { changes } = await pull(DEVICE_A, 0);
+      expect(changes.levels).toEqual([
+        expect.objectContaining({ id: RDC, name: "Rez-de-chaussée" }),
+      ]);
+      expect(changes.spaces.map((space) => space.id).sort()).toEqual([KITCHEN, WC].sort());
+    });
+  });
+
   it("reports each device's own lastMutationId", async () => {
     await push({ clientId: DEVICE_A, mutations: seed });
     await push({

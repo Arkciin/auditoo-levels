@@ -47,6 +47,7 @@ export const mutationSchema = z.discriminatedUnion("name", [
   envelope("moveLevel"),
   envelope("deleteLevel"),
   envelope("restoreLevel"),
+  envelope("duplicateLevel"),
   envelope("createSpace"),
   envelope("renameSpace"),
   envelope("moveSpace"),

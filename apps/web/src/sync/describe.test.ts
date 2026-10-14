@@ -30,6 +30,21 @@ function mutation(action: Action): Mutation {
   return { id: sequence, timestamp: 1_000, ...action };
 }
 
+const COPY = uuid(14);
+
+/** A copy of RDC carrying `count` rooms. */
+function duplicateRdc(count: number): Action {
+  const spaces = Array.from({ length: count }, (_, i) => ({
+    id: uuid(31 + i),
+    name: `Pièce ${i + 1}`,
+    position: `a${i}`,
+  }));
+  return {
+    name: "duplicateLevel",
+    args: { id: COPY, sourceId: RDC, name: "RDC (copie)", position: "a0V", spaces },
+  };
+}
+
 /** Writes expectations with plain spaces; French typography wants U+00A0 inside « ». */
 function french(text: string): string {
   return text.replaceAll("« ", "«\u00a0").replaceAll(" »", "\u00a0»");
@@ -61,6 +76,9 @@ describe("describeMutation", () => {
     ["Niveau « R+1 » déplacé", { name: "moveLevel", args: { id: R1, position: "Zz" } }],
     ["Niveau « RDC » supprimé", { name: "deleteLevel", args: { id: RDC } }],
     ["Niveau « R+1 » restauré", { name: "restoreLevel", args: { id: R1 } }],
+    ["Niveau « RDC » dupliqué en « RDC (copie) » avec ses 3 pièces", duplicateRdc(3)],
+    ["Niveau « RDC » dupliqué en « RDC (copie) » avec sa pièce", duplicateRdc(1)],
+    ["Niveau « RDC » dupliqué en « RDC (copie) »", duplicateRdc(0)],
     [
       "Pièce « Salon » ajoutée",
       { name: "createSpace", args: { id: uuid(24), levelId: RDC, name: "Salon", position: "a3" } },
@@ -102,6 +120,10 @@ describe("describeMutation", () => {
     expect(
       describeIt({ name: "moveSpace", args: { id: KITCHEN, levelId: unknown, position: "a0" } }),
     ).toBe(french("Pièce « Cuisine » déplacée vers un autre niveau"));
+    const copyOfUnknown = duplicateRdc(0);
+    if (copyOfUnknown.name !== "duplicateLevel") throw new Error("unreachable");
+    copyOfUnknown.args.sourceId = unknown;
+    expect(describeIt(copyOfUnknown)).toBe(french("Niveau dupliqué en « RDC (copie) »"));
   });
 });
 
@@ -134,6 +156,24 @@ describe("describePendingMutations", () => {
         "Pièce « Débarras » déplacée vers « RDC »",
         "Pièce « Débarras » déplacée",
         "Pièce « Débarras » supprimée",
+      ].map(french),
+    );
+  });
+
+  it("names the level and the rooms a copy created", () => {
+    const pending = [
+      mutation(duplicateRdc(1)),
+      mutation({ name: "renameSpace", args: { id: uuid(31), name: "Cellier" } }),
+      mutation({ name: "moveSpace", args: { id: uuid(31), levelId: RDC, position: "a9" } }),
+      mutation({ name: "renameLevel", args: { id: COPY, name: "Studio" } }),
+    ];
+
+    expect(describePendingMutations(base, pending)).toEqual(
+      [
+        "Niveau « RDC » dupliqué en « RDC (copie) » avec sa pièce",
+        "« Pièce 1 » renommée en « Cellier »",
+        "Pièce « Cellier » déplacée vers « RDC »",
+        "« RDC (copie) » renommé en « Studio »",
       ].map(french),
     );
   });

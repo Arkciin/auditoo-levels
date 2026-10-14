@@ -14,11 +14,13 @@ import {
   compareByPosition,
   isValidPosition,
   type Level,
+  MAX_DUPLICATED_SPACES,
   type MutationName,
   MutationRejectedError,
   mutationNames,
   type Positioned,
   type Property,
+  positionAtEnd,
   positionAtIndex,
   type Snapshot,
   type Space,
@@ -129,6 +131,11 @@ async function runScenario(
     if (action.name === "createSpace") {
       const level = view.levels.get(action.args.levelId);
       if (level) propertyOfSpace.set(action.args.id, level.propertyId);
+    } else if (action.name === "duplicateLevel") {
+      const source = view.levels.get(action.args.sourceId);
+      if (source) {
+        for (const space of action.args.spaces) propertyOfSpace.set(space.id, source.propertyId);
+      }
     }
     try {
       await device.client.mutate<MutationName>(action.name, action.args);
@@ -340,6 +347,20 @@ function simulateUser(random: () => number): (view: Snapshot) => Action {
     restoreLevel: {
       weight: (s) => when(s.deletedLevels.length > 0, 2),
       build: (s) => ({ name: "restoreLevel", args: { id: pick(s.deletedLevels).id } }),
+    },
+    duplicateLevel: {
+      weight: (s) => when(s.visibleLevels.length > 0, 2),
+      build: (s) => {
+        const source = pick(s.visibleLevels);
+        // The rooms the device shows, in order, under new ids and fresh positions.
+        const spaces: { id: string; name: string; position: string }[] = [];
+        for (const space of s.spacesOf(source.id).slice(0, MAX_DUPLICATED_SPACES)) {
+          spaces.push({ id: id(), name: space.name, position: positionAtEnd(spaces, random) });
+        }
+        const position = drop(s.levelsOf(source.propertyId));
+        const args = { id: id(), sourceId: source.id, name: name("Niveau"), position, spaces };
+        return { name: "duplicateLevel", args };
+      },
     },
     createSpace: {
       weight: (s) => when(s.visibleLevels.length > 0, 12),
