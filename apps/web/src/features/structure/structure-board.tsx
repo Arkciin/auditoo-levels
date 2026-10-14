@@ -650,17 +650,27 @@ function DragPreview({
         <span className="pb-2 text-sm text-muted-foreground tabular-nums">
           {plural(containers[level.id]?.length ?? 0, "pièce", "pièces")}
         </span>
-        <GripVertical aria-hidden="true" className="m-3 size-5 text-muted-foreground" />
+        <PreviewButtons />
       </div>
     );
   }
   const space = spacesById.get(active.id);
   if (!space) return null;
   return (
-    <div className="flex h-12 cursor-grabbing items-center rounded-lg bg-card pr-1 pl-10 shadow-drag">
+    <div className="flex h-12 cursor-grabbing items-center gap-2 rounded-lg bg-card pr-1 pl-10 shadow-drag">
       <span className="flex-1 truncate">{space.name}</span>
-      <GripVertical aria-hidden="true" className="m-3 size-5 text-muted-foreground" />
+      <PreviewButtons />
     </div>
+  );
+}
+
+/** The menu and drag buttons of a row, drawn: the copy in the hand looks like the row it left. */
+function PreviewButtons() {
+  return (
+    <>
+      <EllipsisVertical aria-hidden="true" className="m-3 size-5 text-muted-foreground" />
+      <GripVertical aria-hidden="true" className="m-3 size-5 text-muted-foreground" />
+    </>
   );
 }
 
