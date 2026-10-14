@@ -20,16 +20,19 @@ import {
   type MutationName,
   type MutatorTx,
   mutationArgsSchemas,
+  mutationNames,
   mutators,
 } from "./mutators";
 import { idSchema, levelSchema, propertySchema, spaceSchema, timestampSchema } from "./schemas";
 
 export const MAX_MUTATIONS_PER_PUSH = 100;
 
+/** Per-device sequence number of a mutation, strictly increasing (gaps allowed). */
+const mutationIdSchema = z.number().int().positive();
+
 function envelope<N extends MutationName>(name: N) {
   return z.object({
-    /** Per-device sequence number, strictly increasing. */
-    id: z.number().int().positive(),
+    id: mutationIdSchema,
     name: z.literal(name),
     args: mutationArgsSchemas[name],
     /** When the user performed the action, on their device. */
@@ -37,22 +40,14 @@ function envelope<N extends MutationName>(name: N) {
   });
 }
 
-export const mutationSchema = z.discriminatedUnion("name", [
-  envelope("createProperty"),
-  envelope("renameProperty"),
-  envelope("deleteProperty"),
-  envelope("restoreProperty"),
-  envelope("createLevel"),
-  envelope("renameLevel"),
-  envelope("moveLevel"),
-  envelope("deleteLevel"),
-  envelope("restoreLevel"),
-  envelope("createSpace"),
-  envelope("renameSpace"),
-  envelope("moveSpace"),
-  envelope("deleteSpace"),
-  envelope("restoreSpace"),
-]);
+type AnyEnvelope = { [N in MutationName]: ReturnType<typeof envelope<N>> }[MutationName];
+
+// One envelope per mutation of `mutationArgsSchemas`, so that a new mutation can never be missing
+// here (the server would reject it as invalid). Typing boundary: `map` cannot express that it
+// returns one envelope per name, and at least one; `Mutation` stays a union discriminated by name.
+const envelopes = mutationNames.map((name) => envelope(name)) as [AnyEnvelope, ...AnyEnvelope[]];
+
+export const mutationSchema = z.discriminatedUnion("name", envelopes);
 export type Mutation = z.infer<typeof mutationSchema>;
 
 /** Runs a mutation's mutator. Callers own the transaction (and its rollback on error). */
@@ -74,7 +69,7 @@ export function applyMutation(tx: MutatorTx, mutation: Mutation): Promise<void> 
  * fail the whole push, or the device would retry it forever and never sync again.
  */
 export const mutationEnvelopeSchema = z.object({
-  id: z.number().int().positive(),
+  id: mutationIdSchema,
   name: z.string(),
   args: z.unknown(),
   timestamp: timestampSchema,

@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import { type MutationArgs, mutationNames } from "./mutators";
 import {
   MAX_MUTATIONS_PER_PUSH,
+  type Mutation,
   type MutationEnvelope,
   mutationSchema,
   type PushRequest,
@@ -66,5 +68,16 @@ describe("pushRequestSchema", () => {
     const sent: PushRequest = { clientId: CLIENT, mutations: [mutationSchema.parse(valid)] };
     const received: ReceivedPushRequest = sent; // Type-level: a device's push is always accepted.
     expect(pushRequestSchema.parse(received)).toEqual(sent);
+  });
+});
+
+describe("mutationSchema", () => {
+  it("has one envelope per mutation, discriminated by name", () => {
+    expect(mutationSchema.options.map((option) => option.shape.name.value)).toEqual(mutationNames);
+    // Type-level: each name still narrows the arguments.
+    expectTypeOf<Extract<Mutation, { name: "moveSpace" }>["args"]>().toEqualTypeOf<
+      MutationArgs<"moveSpace">
+    >();
+    expectTypeOf<Mutation["name"]>().toEqualTypeOf<(typeof mutationNames)[number]>();
   });
 });

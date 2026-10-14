@@ -114,9 +114,9 @@ Example: a room's surface area, in m², optional.
    then the mutator: `requireSpace`, `reviveLevel(tx, space.levelId)`, then
    `putSpace({ ...space, area, deletedAt: null })`. Also set `area: null` in `createSpace`, so that
    optimistic rows equal server rows.
-4. **Protocol** (`packages/shared/src/protocol.ts`): add `envelope("setSpaceArea")` to
-   `mutationSchema`. TypeScript does not notice a missing one: the server would reject the mutation
-   as invalid, and only the convergence simulation would tell.
+4. **Protocol**: nothing to add. `mutationSchema` (`packages/shared/src/protocol.ts`) derives one
+   envelope per entry of `mutationArgsSchemas`, so the server can never reject the new mutation as
+   invalid for lack of one.
 5. **Migration** (`apps/server/src/db/migrations.ts`): append `003_space_area` with
    `ALTER TABLE spaces ADD COLUMN area double precision CHECK (area > 0)`. Not `numeric`: both
    drivers return it as a string, which fails the pull schema.
