@@ -452,9 +452,9 @@ export class SyncClient {
         const outcome = await this.runCycle();
         this.releaseWaiters(cycle);
         if (outcome === "failed") {
-          // An urgent request made while this cycle was failing deserves a fresh attempt. Any
-          // other request made meanwhile waits for the retry, like the routine ones made after
-          // it (see SyncTrigger) instead of hammering a failing server.
+          // An urgent request made while this cycle was failing deserves a fresh attempt. Other
+          // requests made meanwhile wait for the retry, and so do the routine ones made after it
+          // (see SyncTrigger): no hammering a failing server.
           if (this.urgentRequest) {
             this.syncRequested = true;
             continue;
