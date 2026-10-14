@@ -39,10 +39,13 @@ wake the server. Once visited, the app opens from its cache and syncs when the s
 
 ## Features
 
-- **Logements, levels, rooms**: add them, rename in place (tap the name), delete with a swipe
-  (or from a menu, or a button with a mouse), and undo from the toast.
+- **Logements, levels, rooms**: add them, rename in place (tap the name), delete with a swipe or
+  from their ⋮ menu, and undo from the toast.
+- **Duplicate a level** with its rooms, for identical floors: R+1 becomes R+2, bedrooms take the
+  next numbers (Chambre 4, Chambre 5), and the copy can be undone.
 - **Drag and drop** by the grip handle: reorder rooms within a level, move a room to another level,
-  reorder levels. The keyboard works too.
+  reorder levels. The keyboard works too, and a room's menu moves it without dragging
+  (« Déplacer vers… »).
 - **Offline-first**: the app opens without network, every change appears instantly and is stored
   on the device, and everything syncs by itself when the connection returns.
 - **Visible sync status**: a header pill (À jour, En attente, Envoi…, Hors ligne, Erreur), an
@@ -52,8 +55,10 @@ wake the server. Once visited, the app opens from its cache and syncs when the s
 - **Fast entry on site**: one-tap level and room suggestions in French, smart numbering
   (Chambre 1, Chambre 2…), levels placed where they belong (Sous-sol below RDC), and an example
   house to try it all.
-- **Installable PWA** with an update prompt. Mobile-first (Chrome on Android, Safari on iOS), French
-  UI, dark mode, 44 px touch targets, Atkinson Hyperlegible Next.
+- **Installable PWA**: « Installer l'application » in the home screen's menu (the browser's prompt,
+  or Safari's steps on iPhone and iPad), a toast once the app works offline, an update prompt.
+- **Mobile-first** (Chrome on Android, Safari on iOS): French UI, dark mode, 44 px touch targets,
+  Atkinson Hyperlegible Next.
 
 ## Quick start
 

@@ -15,7 +15,7 @@ for hours, never loses data, and is fast with one thumb.
 | Path | Contents |
 | --- | --- |
 | `packages/shared/src/schemas.ts` | Zod schemas: entities, `nameSchema` (input), looser row schemas |
-| `packages/shared/src/mutators.ts` | The 14 mutations: argument schemas and deterministic mutators. Every data change lives here |
+| `packages/shared/src/mutators.ts` | The 15 mutations: argument schemas and deterministic mutators. Every data change lives here |
 | `packages/shared/src/positions.ts` | Fractional indexes: `positionAtIndex`, `positionAtEnd`, `compareByPosition` |
 | `packages/shared/src/protocol.ts` | Push/pull wire format, `mutationSchema`, `applyMutation` |
 | `packages/shared/src/snapshot.ts` | In-memory snapshot, `SnapshotTx`, `applyMutations` (rebase), `applyPull` |
@@ -27,7 +27,7 @@ for hours, never loses data, and is fast with one thumb.
 | `apps/web/src/features/` | Screens; `use-safe-mutate.ts` (mutate with a French error toast, undo toast) |
 | `apps/web/src/components/` | Layout, `SwipeToDelete`, `EditableText`, `DatumMarker`; `ui/` is shadcn/ui source |
 | `apps/web/src/lib/suggestions.ts` | French level ranking, room suggestions, numbering, `plural()` |
-| `apps/web/src/sw.ts`, `pwa.ts` | Service worker (Serwist) and its registration |
+| `apps/web/src/sw.ts`, `pwa.ts`, `install.ts` | Service worker (Serwist), its registration, the install offer |
 | `apps/web/e2e/` | Playwright specs; `support.ts` holds the French locators and the gestures |
 
 ## Commands
@@ -68,6 +68,10 @@ pnpm vitest run apps/web/src/sync/convergence.test.ts
    IndexedDB changes go through `DATABASE_VERSION` and `upgrade()` in `storage.ts`. Never delete or
    recreate the `outbox` store: its key generator allocates mutation ids.
 9. **The service worker never caches `/api`.** Data belongs to IndexedDB and the sync engine.
+10. **Every push must fit the server's body limit** (`MAX_BODY_BYTES`, `apps/server/src/app.ts`):
+    a push refused for its size is retried as it is, forever. Bound every list in a mutation's
+    arguments (`MAX_DUPLICATED_SPACES`), and keep the "largest push" test of `app.test.ts` building
+    the largest valid mutation.
 
 ## Conventions
 

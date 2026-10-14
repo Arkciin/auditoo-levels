@@ -116,17 +116,28 @@ GET  /api/events    server-sent events: "poke" { version } after each push that 
 
 ### Isomorphic mutators
 
-`packages/shared/src/mutators.ts` defines what each of the 14 user actions does, once: create,
-rename, delete and restore for each entity, plus `moveLevel` and `moveSpace` (which can change
-level). A mutator is an async function over a tiny transaction interface (`MutatorTx`: get and put
-per entity), implemented by `SnapshotTx` (copy-on-write maps) on the device and by `ServerTx` (SQL
-upserts stamped with the new version, `apps/server/src/sync/server-tx.ts`) on the server.
+`packages/shared/src/mutators.ts` defines what each of the 15 user actions does, once: create,
+rename, delete and restore for each entity, plus `moveLevel`, `moveSpace` (which can change level)
+and `duplicateLevel`. A mutator is an async function over a tiny transaction interface
+(`MutatorTx`: get and put per entity), implemented by `SnapshotTx` (copy-on-write maps) on the
+device and by `ServerTx` (SQL upserts stamped with the new version,
+`apps/server/src/sync/server-tx.ts`) on the server.
 
 Mutators are deterministic: they read only the transaction, their arguments and the mutation
 timestamp; ids and positions are computed by the caller and travel as arguments. The optimistic
 view can only differ from the server when another device changed the same data, and the next pull
 reconciles it. Mutations are intents ("move this room there"), not row states: the server re-runs
 them on its current rows, so a rename and a concurrent move of the same room both survive.
+
+**A level copy carries its rooms.** `duplicateLevel` is `{ id, sourceId, name, position, spaces:
+[{ id, name, position }] }` (at most 100 rooms), not "copy level X": re-run on the server, "copy X"
+would copy rooms the user never saw, and the copies would need ids derived on the server. The
+device names the copy and numbers its bedrooms, so the server creates exactly what the user saw;
+the mutator only reads the source (copying is not editing: a source deleted meanwhile stays
+deleted). It is one mutation, so one transaction (a room the database refuses rolls the whole copy
+back) and one undo, which deletes the copy. A dedicated name rather than `spaces` on `createLevel`:
+Zod strips unknown keys, so a server predating the field (after a rollback) would create an empty
+level and acknowledge it, while an unknown mutation name is rejected whole.
 
 ### On the device: base, outbox, view
 
@@ -145,8 +156,11 @@ acknowledgement alone. State transitions are serialized: none can lose or double
 
 ### Push: ordered, idempotent, never blocked
 
-The device sends its outbox oldest first, in batches of up to 100. `apps/server/src/sync/push.ts`
-gives **each mutation its own transaction**:
+The device sends its outbox oldest first, in batches of up to 100. The server accepts bodies up to
+8 MiB, which the largest valid push fits (100 copies of 100-room levels with the costliest names,
+about 6.5 MiB, checked by `apps/server/src/app.test.ts`): a push refused for its size would be
+retried as it is, forever. `apps/server/src/sync/push.ts` gives **each mutation its own
+transaction**:
 
 1. `SELECT version, epoch FROM server_meta … FOR UPDATE`: take the version lock, check the epoch.
 2. Skip the mutation if `id ≤ clients.last_mutation_id`: retries are no-ops; ids may have gaps.
@@ -224,6 +238,7 @@ than fail). A `NetworkError` means offline, a normal state; HTTP and protocol er
 | Two offline devices append to the same level | Distinct keys | A random 4-character base62 suffix on every key; equal keys still sort by id, identically everywhere |
 | Edit vs delete: rename, move into or add to a deleted item | **Edit wins**: the item and its parents are revived | No input is ever silently discarded; the worst case is an item reappearing, which can be deleted again |
 | Delete a level | Its rooms are hidden with it; undo restores them all | One row write, nothing to remember about which rooms went together |
+| Duplicate a level another device deleted or changed meanwhile | The copy is what the user saw; the source stays as the other device left it | The rooms travel in the mutation; a copy reads its source, it does not edit it |
 | Delete an already deleted item | No-op, no version bump | Idempotent |
 | Move a room to another logement | Rejected | A room belongs to one dwelling; drag and drop never offers it |
 | Mutation on an entity the server does not know | Rejected, acknowledged, dropped at the next pull | Only after a database wipe, or from a buggy client |
@@ -257,6 +272,13 @@ that the list stays strictly ordered with valid keys; 500 appends keep keys at 8
   off: navigations are answered from the precache, so a preload request would be wasted traffic.
 - **No runtime caching of the API.** Data lives in IndexedDB and belongs to the sync engine; the
   server marks `/api/*` `no-store`. One cache, one truth.
+- **Ready offline, said once** (`apps/web/src/pwa.ts`): when the first install completes, a toast
+  says « Relevé fonctionne maintenant sans réseau. »; not on updates, nor after a Shift+reload
+  (an active worker existed before both).
+- **Install offer** (`apps/web/src/install.ts`): the home screen's menu offers « Installer
+  l'application » when the browser fired `beforeinstallprompt` (kept from before the first render:
+  it fires early, once), and on iPhone and iPad a sheet with Safari's steps and why (iOS keeps the
+  data of installed apps). Nothing once installed or opened standalone.
 - **Prompt to update** (`apps/web/src/pwa.ts`): a new version waits until the user taps "Mettre à
   jour" in a toast, so code is never swapped under someone typing; the first install takes control
   at once (`clientsClaim`).
@@ -273,7 +295,10 @@ that the list stays strictly ordered with valid keys; 500 appends keep keys at 8
 | **Signature: the level datum marker ▽** | Borrowed from building section drawings: a half-filled inverted triangle whose apex rests on the floor line. Every level header is drawn as a floor line carrying it (`apps/web/src/components/datum-marker.tsx`). |
 | **Thumb zone** | The screen's main action ("Nouveau logement", "Ajouter un niveau") sits in a fixed bottom bar; toasts appear just above it; sheets slide up from the bottom. |
 | **One gesture per intent** | Tap a name to rename it in place, swipe a row left to delete it, drag only by the grip handle. They never compete: a swipe locks to the horizontal axis after 8 px and leaves vertical scroll native, a drag starts 4 px into a `touch-action: none` handle, and handles and inputs never start a swipe. |
-| **Other ways than gestures** | Menus on levels and logements; a delete button next to a room being renamed (always shown with a mouse); drag and drop with the keyboard (Space, arrows, Escape), announced in French to screen readers. |
+| **Other ways than gestures** | A ⋮ menu on every logement, level and room: rename, delete, and for a room « Déplacer vers… », a sheet of the other levels (the room goes to the end of the one picked, with undo). Drag and drop works with the keyboard too (Space, arrows, Escape), announced in French to screen readers. |
+| **Menus open on a tap** | Radix opens a menu on pointerdown, so a finger starting a scroll on a ⋮ (one per room) opened it and blocked the scroll. Touch and pen open on the tap; mouse and keyboard are unchanged (`components/ui/dropdown-menu.tsx`). |
+| **Identical floors in one tap** | « Dupliquer le niveau » copies a level with its rooms: a floor becomes the next free floor in the source's spelling (R+1 → R+2, 1er étage → 2e étage), anything else « RDC (copie) »; bedrooms take the logement's next numbers, other rooms keep their names. |
+| **Show where things land** | A level copied, a room moved by menu or just added is tinted for a moment (a static tint with reduced motion), and scrolled into view when it may be out of sight. The room field and its suggestions stay clear of the action bar and the keyboard as rooms pile up above them. |
 | **Rapid room entry** | After Enter the room field stays focused and empty, so rooms are typed in a row. Chips suggest rooms that fit the level: Cave or Chaufferie in a basement, Chambre upstairs. |
 | **Smart numbering** | "Chambre" is always numbered (Chambre 1, Chambre 2…); other rooms only when they repeat (Cuisine, then Cuisine 2), counted across the whole logement (`apps/web/src/lib/suggestions.ts`). |
 | **Levels go where they belong** | French level names are ranked (Sous-sol below RDC, R+n or "2e étage" above, Combles on top), so a Sous-sol added after the RDC is inserted below it; unknown names go last. The sheet offers the likely next levels in one tap. |
@@ -310,14 +335,14 @@ that the list stays strictly ordered with valid keys; 500 appends keep keys at 8
 
 ## Testing strategy
 
-`pnpm test` runs 185 Vitest tests in about 40 s, with no database to install.
+`pnpm test` runs 213 Vitest tests in about 40 s, with no database to install.
 
 | Suite | Tests | Covers |
 | --- | --- | --- |
-| `packages/shared` | 44 | Mutators (edit wins, rejections without partial writes, determinism), positions (fast-check property test), name validation, protocol envelopes |
-| `apps/server`, on in-memory PGlite | 29 | Idempotent retries, rejected and invalid mutations acknowledged, database refusals as permanent, sparse ids, no-op mutations, epochs, reset, gapless versions under concurrent pushes; HTTP validation, cache headers, SSE pokes, SPA fallback; migrations |
-| `apps/web`, on fake-indexeddb | 112 | `SyncClient` against `MemoryServer`, an in-memory reference implementation of the protocol; storage (id allocation, atomic pulls, reopened connections), transport errors, React bindings, selectors, French descriptions, naming suggestions; the convergence simulation (12 tests, below) |
-| Playwright, mobile Chromium | 8 | Create, rename, swipe and undo; levels and rooms entry; drag within and across levels; offline reload then resync; a rename reaching a second device through SSE |
+| `packages/shared` | 52 | Mutators (edit wins, rejections without partial writes, determinism, level copies and their arguments), positions (fast-check property test), name validation, protocol envelopes |
+| `apps/server`, on in-memory PGlite | 32 | Idempotent retries, rejected and invalid mutations acknowledged, database refusals as permanent (a level copy rolled back whole), sparse ids, no-op mutations, epochs, reset, gapless versions under concurrent pushes; HTTP validation, the largest valid push, cache headers, SSE pokes, SPA fallback; migrations |
+| `apps/web`, on fake-indexeddb | 129 | `SyncClient` against `MemoryServer`, an in-memory reference implementation of the protocol; storage (id allocation, atomic pulls, reopened connections), transport errors, React bindings, selectors, French descriptions, naming suggestions and level copies, the install offer; the convergence simulation (12 tests, below) |
+| Playwright, mobile Chromium | 14 | Create, rename, swipe and undo; levels and rooms entry, suggestions kept within reach; level duplication; the room menu (move to another level, rename, delete); drag within and across levels; offline reload then resync, the ready-offline toast; the install offer (Android prompt, iOS steps); a rename reaching a second device through SSE |
 
 **The convergence simulation** (`apps/web/src/sync/convergence.test.ts`) is the sync engine's
 safety net. Three devices share a `MemoryServer` for 300 random steps, over 8 seeds. At each step a
@@ -325,7 +350,7 @@ device acts on what it shows (often stale), switches its network between online,
 syncs, keeps working while a sync is in flight, or restarts and loses its memory. After every step,
 memory must equal storage and the view must equal base plus pending. At the end every device must
 hold exactly the server's state with an empty outbox, no mutation may be lost or rejected,
-invariants must hold (parents exist, positions valid, no room left its logement), and all 14
+invariants must hold (parents exist, positions valid, no room left its logement), and all 15
 mutation kinds must have run. Four more seeds also wipe the server's database twice.
 
 The server was also checked by hand against PostgreSQL 16: concurrent migrations, 12 devices × 25
@@ -363,13 +388,18 @@ and end-to-end tests on every push.
 - **Concurrent renames are whole-field last-write-wins**, with no merge and no conflict UI.
 - **Server rejections are silent**: the push response has no per-mutation outcome, so a rejected
   change just disappears at the next pull. Next: return rejected ids with reasons and show them.
-- **Room actions are discreet on touch**: swipe to delete, or tap the name and then the trash
-  button. A per-room menu would be more discoverable, especially with a screen reader.
+- **Pushes are capped in count, not in bytes**: the body limit holds for today's largest mutation
+  (tested). Next: the device also caps each push in bytes, so that no future mutation can outgrow it.
+- **A level copy takes one SQL statement per room**, all while holding the version lock: a push of
+  a 100-room copy takes about 60 ms on PGlite (measured over HTTP), more with network round trips
+  to PostgreSQL. Next, if levels grow: a batched `putSpaces` on `ServerTx`.
 - **Long levels are dragged whole**: an earlier version collapsed every level during a level drag,
   but the layout shift moved dnd-kit's measured rect and the floating copy drifted away from the
   finger (caught by an e2e test). Collapsing again needs a modifier that re-anchors the overlay.
 - **iOS storage eviction**: Safari may erase the storage of a web app left unused for a while unless
-  it is installed to the home screen. Only pending changes are at risk; synced data comes back.
+  it is installed to the home screen. Only pending changes are at risk; synced data comes back. The
+  install sheet explains it, but only to those who open it. Next: suggest installing when changes
+  wait on an iPhone that runs Relevé in Safari.
 - **A wiped database loses confirmed data**: devices re-push only what was still pending. Backups
   are the server's job; the free Render database is for demos.
 
