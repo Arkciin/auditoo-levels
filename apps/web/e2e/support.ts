@@ -238,6 +238,22 @@ export async function levelAction(page: Page, levelName: string, action: string)
   await page.getByRole("menuitem", { name: action, exact: true }).tap();
 }
 
+/** Picks `action` in the ⋮ menu of a room ("Renommer", "Déplacer vers…"…). */
+export async function roomAction(page: Page, roomName: string, action: string): Promise<void> {
+  await page.getByRole("button", { name: `Actions de la pièce ${roomName}`, exact: true }).tap();
+  await page.getByRole("menuitem", { name: action, exact: true }).tap();
+}
+
+/** Moves a room with its menu's « Déplacer vers… » sheet: to the end of `levelName`. */
+export async function moveRoomTo(page: Page, roomName: string, levelName: string): Promise<void> {
+  await roomAction(page, roomName, "Déplacer vers…");
+  const sheet = page.getByRole("dialog", { name: `Déplacer « ${roomName} »` });
+  // Each level is named with its room count: "R+1, 3 pièces".
+  const level = new RegExp(`^${levelName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")},`);
+  await sheet.getByRole("button", { name: level }).tap();
+  await expect(sheet).toBeHidden();
+}
+
 /** Renames by tapping a name (of a logement, level or room), typing, then Enter. */
 export async function renameInPlace(name: Locator, field: Locator, newName: string): Promise<void> {
   await name.tap();
@@ -277,8 +293,9 @@ export async function swipeLeft(row: Locator): Promise<void> {
       const box = await row.boundingBox();
       if (!box) throw new Error("The row to swipe is not visible");
       const y = box.y + box.height / 2;
-      const fromX = box.x + box.width * 0.75; // on the name, clear of the drag handle at the right
-      const toX = box.x + box.width * 0.15;
+      // On the name, clear of the buttons at the right (menu, drag handle): they never swipe.
+      const fromX = box.x + box.width * 0.6;
+      const toX = box.x + box.width * 0.1;
 
       // The row may move between measuring it and touching it: the list of logements changes
       // whenever another test adds one. Lift the finger if it landed elsewhere, and try again.

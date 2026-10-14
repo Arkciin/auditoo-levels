@@ -37,7 +37,15 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { type Level, positionAtIndex, type Space } from "@repo/shared";
-import { Copy, EllipsisVertical, GripVertical, Pencil, Plus, Trash } from "lucide-react";
+import {
+  ArrowUpDown,
+  Copy,
+  EllipsisVertical,
+  GripVertical,
+  Pencil,
+  Plus,
+  Trash,
+} from "lucide-react";
 import { type ComponentProps, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -59,6 +67,7 @@ import { cn } from "@/lib/utils";
 import type { LevelStructure } from "@/sync";
 import { AddSpace } from "./add-space";
 import { HighlightProvider, HighlightTint, scrollBehavior, useHighlight } from "./highlight";
+import { MoveSpaceDrawer } from "./move-space-drawer";
 import { useDuplicateLevel } from "./use-duplicate-level";
 
 type Containers = Readonly<Record<string, readonly string[]>>;
@@ -92,6 +101,9 @@ export function StructureBoard({
   const [dragContainers, setDragContainers] = useState<Containers | null>(null);
   const lastOverId = useRef<UniqueIdentifier | null>(null);
   const movedToNewContainer = useRef(false);
+  // One « Déplacer vers… » sheet for every room; the room stays set while the sheet closes.
+  const [move, setMove] = useState<{ space: Space; open: boolean } | null>(null);
+  const moveSpace = useCallback((space: Space) => setMove({ space, open: true }), []);
 
   const levels = useMemo(() => structure.map((group) => group.level), [structure]);
   const levelIds = useMemo(() => levels.map((level) => level.id), [levels]);
@@ -261,6 +273,7 @@ export function StructureBoard({
                 spacesById={spacesById}
                 autoAdd={autoAddLevelId === level.id}
                 onAutoAddHandled={onAutoAddHandled}
+                onMoveSpace={levels.length > 1 ? moveSpace : undefined}
               />
             ))}
           </div>
@@ -279,6 +292,12 @@ export function StructureBoard({
           document.body,
         )}
       </DndContext>
+      <MoveSpaceDrawer
+        propertyId={propertyId}
+        space={move?.space ?? null}
+        open={move?.open ?? false}
+        onOpenChange={(open) => setMove((current) => current && { ...current, open })}
+      />
     </HighlightProvider>
   );
 }
@@ -296,6 +315,7 @@ function LevelSection({
   spacesById,
   autoAdd,
   onAutoAddHandled,
+  onMoveSpace,
 }: {
   propertyId: string;
   level: Level;
@@ -303,6 +323,8 @@ function LevelSection({
   spacesById: ReadonlyMap<string, Space>;
   autoAdd: boolean;
   onAutoAddHandled: () => void;
+  /** Opens « Déplacer vers… »; undefined when there is no other level to move a room to. */
+  onMoveSpace: ((space: Space) => void) | undefined;
 }) {
   const {
     attributes,
@@ -445,7 +467,7 @@ function LevelSection({
       <SortableContext items={[...spaceIds]} strategy={verticalListSortingStrategy}>
         <ul aria-label={`Pièces du niveau ${level.name}`}>
           {spaces.map((space) => (
-            <SpaceRow key={space.id} space={space} />
+            <SpaceRow key={space.id} space={space} onMove={onMoveSpace} />
           ))}
         </ul>
       </SortableContext>
@@ -462,7 +484,14 @@ function LevelSection({
   );
 }
 
-function SpaceRow({ space }: { space: Space }) {
+function SpaceRow({
+  space,
+  onMove,
+}: {
+  space: Space;
+  /** Opens « Déplacer vers… »; undefined when there is no other level. */
+  onMove: ((space: Space) => void) | undefined;
+}) {
   const {
     attributes,
     listeners,
@@ -477,6 +506,8 @@ function SpaceRow({ space }: { space: Space }) {
   });
   const safeMutate = useSafeMutate();
   const [renaming, setRenaming] = useState(false);
+  /** What to do once the menu has closed and let go of the focus. */
+  const afterMenu = useRef<"rename" | "move" | null>(null);
 
   async function rename(name: string) {
     if (!(await safeMutate("renameSpace", { id: space.id, name }))) throw new Error("not saved");
@@ -497,7 +528,8 @@ function SpaceRow({ space }: { space: Space }) {
       className={cn("relative", isDragging && "z-10 opacity-40")}
     >
       <SwipeToDelete onDelete={() => void remove()} disabled={renaming}>
-        <div className="flex h-12 items-center gap-1 border-b border-rule pr-1 pl-10">
+        {/* gap-2, as in the level header: the ⋮ buttons line up in one column. */}
+        <div className="flex h-12 items-center gap-2 border-b border-rule pr-1 pl-10">
           <EditableText
             value={space.name}
             label="Nom de la pièce"
@@ -507,23 +539,59 @@ function SpaceRow({ space }: { space: Space }) {
             className="h-full flex-1"
             inputClassName="h-9"
           />
-          {/* Always there with a mouse; on touch screens it appears while renaming, as the
-              non-swipe way to delete (screen readers included). Pressing it must not blur the
-              rename field, or the field would close and take the button with it. */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className={cn(
-              renaming
-                ? "text-destructive"
-                : "hidden text-muted-foreground pointer-fine:inline-flex",
-            )}
-            aria-label={`Supprimer ${space.name}`}
-            onPointerDown={(event) => event.preventDefault()}
-            onClick={() => void remove()}
-          >
-            <Trash />
-          </Button>
+          {/* Every action without a gesture (keyboard, screen reader, one thumb): the menu. */}
+          {renaming ? null : (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`Actions de la pièce ${space.name}`}
+                  className="text-muted-foreground"
+                  data-no-swipe
+                >
+                  <EllipsisVertical />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
+                onCloseAutoFocus={(event) => {
+                  // The rename field or the sheet takes the focus, not the menu button. The sheet
+                  // only opens now: a dialog opened while the menu still holds the focus can lose
+                  // it, and close at once.
+                  const next = afterMenu.current;
+                  afterMenu.current = null;
+                  if (next === null) return;
+                  event.preventDefault();
+                  if (next === "move") onMove?.(space);
+                }}
+              >
+                <DropdownMenuItem
+                  onSelect={() => {
+                    afterMenu.current = "rename";
+                    setRenaming(true);
+                  }}
+                >
+                  <Pencil />
+                  Renommer
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  disabled={onMove === undefined}
+                  onSelect={() => {
+                    afterMenu.current = "move";
+                  }}
+                >
+                  <ArrowUpDown />
+                  Déplacer vers…
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem variant="destructive" onSelect={() => void remove()}>
+                  <Trash />
+                  Supprimer la pièce
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           <DragHandle
             ref={setActivatorNodeRef}
             label={`Déplacer ${space.name}`}

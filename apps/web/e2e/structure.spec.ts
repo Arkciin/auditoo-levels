@@ -5,9 +5,11 @@ import {
   expectLevels,
   expectRooms,
   levelAction,
+  moveRoomTo,
   reloadOnceSynced,
   renameInPlace,
   room,
+  roomAction,
   roomName,
   roomSuggestion,
   structureSummary,
@@ -100,6 +102,58 @@ test("rename a room in place, undo the deletion of a room or a level", async ({ 
     await expectLevels(page, ["RDC", "R+1"]);
     await expectRooms(page, "RDC", ["Entrée", "Salon", "Cuisine"]);
     await expectRooms(page, "R+1", ["Chambre 1", "Chambre 2"]);
+  });
+});
+
+test("act on a room from its menu: move it to another level, rename it, delete it", async ({
+  page,
+}) => {
+  await createProperty(page, uniqueName("Maison"));
+  await addLevel(page, "RDC");
+  await typeRooms(page, "RDC", ["Entrée", "Bureau", "Cuisine"]);
+
+  await test.step("with a single level, there is nowhere to move a room to", async () => {
+    await page.getByRole("button", { name: "Actions de la pièce Bureau", exact: true }).tap();
+    await expect(page.getByRole("menuitem", { name: "Déplacer vers…" })).toBeDisabled();
+    await page.keyboard.press("Escape");
+  });
+
+  await addLevel(page, "R+1");
+  await typeRooms(page, "R+1", ["Chambre 1"]);
+  const moved = "Pièce « Bureau » déplacée vers « R+1 »";
+
+  await test.step("« Déplacer vers… » sends the room to the end of the level picked", async () => {
+    await moveRoomTo(page, "Bureau", "R+1");
+    await expect(toast(page, moved)).toBeVisible();
+    await expectRooms(page, "RDC", ["Entrée", "Cuisine"]);
+    await expectRooms(page, "R+1", ["Chambre 1", "Bureau"]);
+  });
+
+  await test.step("undo puts it back where it was", async () => {
+    await undo(page, moved);
+    await expectRooms(page, "RDC", ["Entrée", "Bureau", "Cuisine"]);
+    await expectRooms(page, "R+1", ["Chambre 1"]);
+  });
+
+  await test.step("rename and delete from the menu too", async () => {
+    await roomAction(page, "Cuisine", "Renommer");
+    const field = page.getByRole("textbox", { name: "Nom de la pièce", exact: true });
+    await expect(field).toBeFocused();
+    await field.fill("Cuisine ouverte");
+    await field.press("Enter");
+    await expectRooms(page, "RDC", ["Entrée", "Bureau", "Cuisine ouverte"]);
+
+    await roomAction(page, "Entrée", "Supprimer la pièce");
+    await expect(toast(page, "Pièce « Entrée » supprimée")).toBeVisible();
+    await expectRooms(page, "RDC", ["Bureau", "Cuisine ouverte"]);
+  });
+
+  await test.step("a move is saved like any change", async () => {
+    await moveRoomTo(page, "Bureau", "R+1");
+    await expectRooms(page, "R+1", ["Chambre 1", "Bureau"]);
+    await reloadOnceSynced(page);
+    await expectRooms(page, "RDC", ["Cuisine ouverte"]);
+    await expectRooms(page, "R+1", ["Chambre 1", "Bureau"]);
   });
 });
 
