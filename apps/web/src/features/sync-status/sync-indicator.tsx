@@ -69,7 +69,8 @@ export function presentStatus(status: SyncStatus): StatusPresentation {
         "Le serveur ne répond pas : le réseau est peut-être trop faible, ou le serveur redémarre. Vos modifications sont enregistrées sur cet appareil et partiront dès qu’il répondra.",
     };
   }
-  if (status.phase === "error") {
+  // Until a cycle succeeds: a retry in progress must not read « À jour » meanwhile.
+  if (status.phase === "error" || status.lastError !== null) {
     const message = status.lastError ?? "Le serveur n’a pas accepté la requête.";
     // Some errors already tell the user what to do (reload the page): don't promise a retry.
     const followUp = /recharg/i.test(message)

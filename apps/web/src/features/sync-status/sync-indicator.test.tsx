@@ -66,6 +66,13 @@ describe("presentStatus", () => {
     ],
     ["a failed sync", status({ phase: "error" }), "error", "Erreur", "La synchronisation a échoué"],
     [
+      "the retry of a failed sync, until it succeeds",
+      status({ phase: "syncing", sending: true, lastError: "Erreur 503.", pendingCount: 1 }),
+      "error",
+      "Erreur",
+      "La synchronisation a échoué",
+    ],
+    [
       "no network, whatever else is going on",
       status({ connection: "offline", phase: "error", pendingCount: 3 }),
       "offline",
