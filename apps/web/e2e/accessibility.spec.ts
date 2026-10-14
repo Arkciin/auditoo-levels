@@ -140,3 +140,16 @@ test("an unknown address", async ({ page }) => {
 
   await expectAccessible(page, "unknown address");
 });
+
+test("a browser that blocks storage", async ({ page }) => {
+  // As some private modes do: opening IndexedDB fails.
+  await page.addInitScript(() => {
+    IDBFactory.prototype.open = () => {
+      throw new DOMException("Storage is blocked", "SecurityError");
+    };
+  });
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Stockage indisponible" })).toBeVisible();
+
+  await expectAccessible(page, "storage unavailable");
+});
