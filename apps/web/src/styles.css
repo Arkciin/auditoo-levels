@@ -1,0 +1,268 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@fontsource-variable/atkinson-hyperlegible-next";
+
+/* Dark mode follows the OS setting; there is no in-app toggle. */
+@custom-variant dark (@media (prefers-color-scheme: dark));
+
+/*
+ * Relevé design tokens.
+ *
+ * A field tool for dim basements and bright glare: paper background, white surfaces, hairline
+ * rules as structure, one brand colour (forest) and one accent (fern). No gradients, no drop
+ * shadows (`shadow-drag` is reserved for an item being dragged).
+ *
+ * How the palette maps onto the shadcn variables:
+ * - `accent` is fern, the brand accent (selected states, success, focus ring). Neutral hover and
+ *   pressed surfaces use `muted`, not `accent`.
+ * - `warning` is the offline tint and `warning-foreground` its text colour:
+ *   `bg-warning text-warning-foreground` for a banner, `text-warning-foreground` for an icon.
+ * - `rule` draws structure (separators, level lines), `border` frames surfaces, `input` outlines
+ *   fields: it is darker so that it reaches 3:1 against paper and surface (WCAG 1.4.11).
+ * - Radius: controls use `rounded-lg` (--radius, 0.5rem), sheets use `rounded-xl` (0.75rem).
+ */
+:root {
+  --radius: 0.5rem;
+
+  --background: #f3f5f2; /* paper */
+  --foreground: #17201c; /* ink */
+  --card: #ffffff; /* surface */
+  --card-foreground: #17201c;
+  --popover: #ffffff;
+  --popover-foreground: #17201c;
+  --primary: #033527; /* forest */
+  --primary-foreground: #ffffff;
+  --secondary: #e4eae6;
+  --secondary-foreground: #17201c;
+  --muted: #e8ede9;
+  --muted-foreground: #5e6a65;
+  --accent: #2f7a5a; /* fern */
+  --accent-foreground: #ffffff;
+  --destructive: #b42318;
+  --destructive-foreground: #ffffff;
+  --warning: #fdf1dc; /* offline tint */
+  --warning-foreground: #8a4b08; /* offline text */
+  --success: #2f7a5a;
+  --success-foreground: #ffffff;
+  --border: #d3dad6;
+  --rule: #d3dad6;
+  --input: #848f8a;
+  --ring: #2f7a5a;
+
+  /* Height of a bottom action bar, safe-area inset excluded. Toasts are lifted above it. */
+  --action-bar-height: 4.5rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0f1513;
+    --foreground: #e4eae7;
+    --card: #161e1b;
+    --card-foreground: #e4eae7;
+    --popover: #161e1b;
+    --popover-foreground: #e4eae7;
+    --primary: #7cc4a2;
+    --primary-foreground: #06231a;
+    --secondary: #222c28;
+    --secondary-foreground: #e4eae7;
+    --muted: #1d2622;
+    --muted-foreground: #93a19b;
+    --accent: #5db38c;
+    --accent-foreground: #06231a;
+    --destructive: #f0644f;
+    --destructive-foreground: #2a0a05;
+    --warning: #2e2213;
+    --warning-foreground: #f2c179;
+    --success: #5db38c;
+    --success-foreground: #06231a;
+    --border: #26322d;
+    --rule: #26322d;
+    --input: #66736d;
+    --ring: #5db38c;
+  }
+}
+
+@theme inline {
+  /* Only the tokens exist as colours (plus white, black, transparent and current). */
+  --color-*: initial;
+  --color-white: #ffffff;
+  --color-black: #000000;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-border: var(--border);
+  --color-rule: var(--rule);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  /* `h-action-bar`, `pb-action-bar`… */
+  --spacing-action-bar: var(--action-bar-height);
+}
+
+@theme {
+  /* The only typeface, self-hosted (works offline). */
+  --font-sans: "Atkinson Hyperlegible Next Variable", ui-sans-serif, system-ui, sans-serif;
+
+  /* Type scale: 13 / 14 / 16 / 18 / 22 / 28 px, nothing else. Body text is 16 px / 1.45. */
+  --text-*: initial;
+  --text-xs: 0.8125rem;
+  --text-xs--line-height: 1.4;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.43;
+  --text-base: 1rem;
+  --text-base--line-height: 1.45;
+  --text-lg: 1.125rem;
+  --text-lg--line-height: 1.4;
+  --text-xl: 1.375rem;
+  --text-xl--line-height: 1.3;
+  --text-2xl: 1.75rem;
+  --text-2xl--line-height: 1.2;
+
+  /* Weights: 400 / 600 / 700. Counts use `tabular-nums`. */
+  --font-weight-*: initial;
+  --font-weight-normal: 400;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* No drop shadows, except under an item being dragged. */
+  --shadow-*: initial;
+  --drop-shadow-*: initial;
+  --shadow-drag: 0 10px 24px -6px rgb(0 0 0 / 0.28), 0 2px 6px rgb(0 0 0 / 0.12);
+
+  /* Mobile-first single column, centred on larger screens: `max-w-app`. */
+  --container-app: 40rem;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring;
+  }
+
+  html {
+    color-scheme: light dark;
+    /* No pull-to-refresh or scroll chaining: they would fight drag-and-drop gestures. */
+    overscroll-behavior-y: none;
+  }
+
+  body {
+    @apply bg-background font-sans text-base text-foreground;
+    overscroll-behavior-y: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* One focus ring for everything focusable, shown for keyboard focus (not on tap or click). */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: var(--accent);
+    color: var(--accent-foreground);
+  }
+
+  /* Durations are shortened rather than removed so animationend/transitionend still fire
+     (Radix and vaul wait for them before unmounting). */
+  @media (prefers-reduced-motion: reduce) {
+    /* biome-ignore-start lint/complexity/noImportantStyles: must also beat inline styles and the unlayered CSS of vaul and Sonner */
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+    /* biome-ignore-end lint/complexity/noImportantStyles: see above */
+  }
+}
+
+/* Safe-area insets (viewport-fit=cover): pad the bars that touch the screen edges. */
+@utility pt-safe {
+  padding-top: env(safe-area-inset-top);
+}
+
+@utility pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+@utility px-safe {
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+/*
+ * Sonner injects its stylesheet at runtime, outside any cascade layer, so it beats Tailwind
+ * utilities. These unlayered rules, more specific than Sonner's, align toasts with the tokens:
+ * app font, no drop shadow, legible sizes, a 44 px action button and our focus ring.
+ */
+[data-sonner-toaster][data-sonner-theme] {
+  font-family: inherit;
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] {
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  font-size: 1rem;
+  line-height: 1.45;
+  box-shadow: none;
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-title] {
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-description] {
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-icon] {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-button] {
+  height: 2.75rem;
+  padding-inline: 0.875rem;
+  border-radius: var(--radius);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-cancel] {
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+}
+
+[data-sonner-toaster] [data-sonner-toast]:focus-visible,
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-button]:focus-visible {
+  box-shadow: none;
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
