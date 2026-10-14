@@ -6,6 +6,7 @@ import {
   expectRooms,
   levelAction,
   moveRoomTo,
+  nextFrames,
   reloadOnceSynced,
   renameInPlace,
   room,
@@ -103,6 +104,25 @@ test("rename a room in place, undo the deletion of a room or a level", async ({ 
     await expectRooms(page, "RDC", ["Entrée", "Salon", "Cuisine"]);
     await expectRooms(page, "R+1", ["Chambre 1", "Chambre 2"]);
   });
+});
+
+test("the room suggestions stay within reach as rooms pile up above them", async ({ page }) => {
+  await createProperty(page, uniqueName("Immeuble"));
+  await addLevel(page, "R+1");
+  const chip = roomSuggestion(page, "R+1", "Chambre");
+  const actionBar = page.getByRole("button", { name: "Ajouter un niveau", exact: true });
+
+  const names: string[] = [];
+  for (let n = 1; n <= 14; n++) {
+    // Where a thumb would find it, without scrolling: never under the bottom bar.
+    const [chipBox, barBox] = await Promise.all([chip.boundingBox(), actionBar.boundingBox()]);
+    if (!chipBox || !barBox) throw new Error("The suggestion and the bar should be visible");
+    expect(chipBox.y + chipBox.height).toBeLessThanOrEqual(barBox.y);
+    await chip.tap();
+    names.push(`Chambre ${n}`);
+    await expectRooms(page, "R+1", names);
+    await nextFrames(page);
+  }
 });
 
 test("act on a room from its menu: move it to another level, rename it, delete it", async ({
