@@ -272,8 +272,8 @@ that the list stays strictly ordered with valid keys; 500 appends keep keys at 8
 | **French UI** | The users are French diagnosticians: trade vocabulary (logement, niveau, pièce, RDC, R+1, Combles), French typography (non-breaking spaces in « quotes » and "3 pièces"), French plural rules. Code stays in English. |
 | **Signature: the level datum marker ▽** | Borrowed from building section drawings: a half-filled inverted triangle whose apex rests on the floor line. Every level header is drawn as a floor line carrying it (`apps/web/src/components/datum-marker.tsx`). |
 | **Thumb zone** | The screen's main action ("Nouveau logement", "Ajouter un niveau") sits in a fixed bottom bar; toasts appear just above it; sheets slide up from the bottom. |
-| **One gesture per intent** | Tap a name to rename it in place, swipe a row left to delete it, drag only by the grip handle. They never compete: a swipe locks to the horizontal axis after 8 px and leaves vertical scroll native, a drag starts 4 px into a `touch-action: none` handle, and handles and inputs never start a swipe. While a level is dragged, levels collapse to their headers. |
-| **Other ways than gestures** | Menus on levels and logements; delete buttons when the pointer is a mouse; drag and drop with the keyboard (Space, arrows, Escape), announced in French to screen readers. |
+| **One gesture per intent** | Tap a name to rename it in place, swipe a row left to delete it, drag only by the grip handle. They never compete: a swipe locks to the horizontal axis after 8 px and leaves vertical scroll native, a drag starts 4 px into a `touch-action: none` handle, and handles and inputs never start a swipe. |
+| **Other ways than gestures** | Menus on levels and logements; a delete button next to a room being renamed (always shown with a mouse); drag and drop with the keyboard (Space, arrows, Escape), announced in French to screen readers. |
 | **Rapid room entry** | After Enter the room field stays focused and empty, so rooms are typed in a row. Chips suggest rooms that fit the level: Cave or Chaufferie in a basement, Chambre upstairs. |
 | **Smart numbering** | "Chambre" is always numbered (Chambre 1, Chambre 2…); other rooms only when they repeat (Cuisine, then Cuisine 2), counted across the whole logement (`apps/web/src/lib/suggestions.ts`). |
 | **Levels go where they belong** | French level names are ranked (Sous-sol below RDC, R+n or "2e étage" above, Combles on top), so a Sous-sol added after the RDC is inserted below it; unknown names go last. The sheet offers the likely next levels in one tap. |
@@ -317,7 +317,7 @@ that the list stays strictly ordered with valid keys; 500 appends keep keys at 8
 | `packages/shared` | 44 | Mutators (edit wins, rejections without partial writes, determinism), positions (fast-check property test), name validation, protocol envelopes |
 | `apps/server`, on in-memory PGlite | 29 | Idempotent retries, rejected and invalid mutations acknowledged, database refusals as permanent, sparse ids, no-op mutations, epochs, reset, gapless versions under concurrent pushes; HTTP validation, cache headers, SSE pokes, SPA fallback; migrations |
 | `apps/web`, on fake-indexeddb | 112 | `SyncClient` against `MemoryServer`, an in-memory reference implementation of the protocol; storage (id allocation, atomic pulls, reopened connections), transport errors, React bindings, selectors, French descriptions, naming suggestions; the convergence simulation (12 tests, below) |
-| Playwright, mobile Chromium | 7 | Create, rename, swipe and undo; levels and rooms entry; drag within and across levels; offline reload then resync; a rename reaching a second device through SSE |
+| Playwright, mobile Chromium | 8 | Create, rename, swipe and undo; levels and rooms entry; drag within and across levels; offline reload then resync; a rename reaching a second device through SSE |
 
 **The convergence simulation** (`apps/web/src/sync/convergence.test.ts`) is the sync engine's
 safety net. Three devices share a `MemoryServer` for 300 random steps, over 8 seeds. At each step a
@@ -362,10 +362,11 @@ and end-to-end tests on every push.
 - **Concurrent renames are whole-field last-write-wins**, with no merge and no conflict UI.
 - **Server rejections are silent**: the push response has no per-mutation outcome, so a rejected
   change just disappears at the next pull. Next: return rejected ids with reasons and show them.
-- **Touch-only room deletion**: on a phone, swiping is the only way to delete a room (levels and
-  logements also have a menu item); screen reader users need a menu per room.
-- **Dragging a level by touch is imprecise**: levels collapse as the drag starts, so the floating
-  copy that decides the drop can drift from the finger (`test.fixme` in `e2e/reorder.spec.ts`).
+- **Room actions are discreet on touch**: swipe to delete, or tap the name and then the trash
+  button. A per-room menu would be more discoverable, especially with a screen reader.
+- **Long levels are dragged whole**: an earlier version collapsed every level during a level drag,
+  but the layout shift moved dnd-kit's measured rect and the floating copy drifted away from the
+  finger (caught by an e2e test). Collapsing again needs a modifier that re-anchors the overlay.
 - **iOS storage eviction**: Safari may erase the storage of a web app left unused for a while unless
   it is installed to the home screen. Only pending changes are at risk; synced data comes back.
 - **A wiped database loses confirmed data**: devices re-push only what was still pending. Backups
