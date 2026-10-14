@@ -8,6 +8,8 @@
  * - each mutation is validated on its own, then runs in its own transaction; an invalid mutation,
  *   or one whose mutator throws `MutationRejectedError`, writes nothing but still counts as
  *   processed, so a bad mutation never blocks a device's queue;
+ * - a push response lists the mutations of the request that were rejected, with a reason code:
+ *   those it rejected, and those an earlier push rejected (a retry after a lost response);
  * - a pull returns the rows whose version is above the cursor, the current version as the new
  *   cursor, and the client's last processed id, all from one consistent state; a cursor ahead of
  *   the server (database reset) gets `reset: true` and the full dataset;
@@ -33,6 +35,7 @@ import {
   pushRequestSchema,
   pushResponseSchema,
   type ReceivedPushRequest,
+  type RejectionReason,
   type Snapshot,
   SnapshotTx,
   type Space,
@@ -75,15 +78,17 @@ export class MemoryServer {
   readonly lostMutations: MutationEnvelope[] = [];
   /**
    * Test seam for server-only rules (permissions, quotas…): mutations it matches are rejected
-   * even though they apply on the device.
+   * even though they apply on the device, as `not_applicable` unless it names another reason.
    */
-  rejectWhen: ((mutation: Mutation) => boolean) | undefined;
+  rejectWhen: ((mutation: Mutation) => boolean | RejectionReason) | undefined;
 
   private data: Snapshot = emptySnapshot;
   private version = 0;
   private rowVersions: Record<Table, Map<string, number>> = emptyVersions();
   private lastMutationIds = new Map<string, number>();
   private processedIds = new Map<string, Set<number>>();
+  /** Per client, the reason of each rejected mutation (the server's `rejected_mutations`). */
+  private rejections = new Map<string, Map<number, RejectionReason>>();
   private currentEpoch: string = crypto.randomUUID();
   private queue: Promise<unknown> = Promise.resolve();
 
@@ -91,21 +96,33 @@ export class MemoryServer {
     return this.exclusive(async () => {
       let lastMutationId = this.lastMutationIds.get(request.clientId) ?? 0;
       if (request.epoch !== undefined && request.epoch !== this.currentEpoch) {
-        return { lastMutationId, epoch: this.currentEpoch };
+        return { lastMutationId, epoch: this.currentEpoch, rejected: [] };
       }
       const processed = this.processedIds.get(request.clientId) ?? new Set<number>();
       this.processedIds.set(request.clientId, processed);
+      const rejections =
+        this.rejections.get(request.clientId) ?? new Map<number, RejectionReason>();
+      this.rejections.set(request.clientId, rejections);
+      const rejected: PushResponse["rejected"] = [];
       for (const envelope of request.mutations.toSorted((a, b) => a.id - b.id)) {
         if (envelope.id <= lastMutationId) {
           if (!processed.has(envelope.id)) this.lostMutations.push(envelope);
+          // Already processed: reported again, the response that said so may have been lost.
+          const reason = rejections.get(envelope.id);
+          if (reason !== undefined) rejected.push({ id: envelope.id, reason });
           continue;
         }
-        if (!(await this.apply(envelope))) this.rejected.push(envelope);
+        const reason = await this.apply(envelope);
+        if (reason !== undefined) {
+          this.rejected.push(envelope);
+          rejections.set(envelope.id, reason);
+          rejected.push({ id: envelope.id, reason });
+        }
         processed.add(envelope.id);
         lastMutationId = envelope.id;
         this.lastMutationIds.set(request.clientId, lastMutationId);
       }
-      return { lastMutationId, epoch: this.currentEpoch };
+      return { lastMutationId, epoch: this.currentEpoch, rejected };
     });
   }
 
@@ -151,31 +168,41 @@ export class MemoryServer {
     return this.lastMutationIds.get(clientId) ?? 0;
   }
 
+  /** The client's mutations this database rejected, with their reason, by id. */
+  rejectionsOf(clientId: string): ReadonlyMap<number, RejectionReason> {
+    return this.rejections.get(clientId) ?? new Map();
+  }
+
   /** Simulates a database recreated from scratch: new epoch, data, version and clients gone. */
   wipe(): void {
     this.currentEpoch = crypto.randomUUID();
     this.processedIds = new Map();
+    this.rejections = new Map();
     this.data = emptySnapshot;
     this.version = 0;
     this.rowVersions = emptyVersions();
     this.lastMutationIds = new Map();
   }
 
-  /** Validates and runs one mutation in its own transaction. Returns false if rejected. */
-  private async apply(envelope: MutationEnvelope): Promise<boolean> {
+  /**
+   * Validates and runs one mutation in its own transaction. Returns why it was rejected, if it
+   * was (the database refusing it can only come from `rejectWhen` here).
+   */
+  private async apply(envelope: MutationEnvelope): Promise<RejectionReason | undefined> {
     const parsed = mutationSchema.safeParse(envelope);
-    if (!parsed.success) return false;
+    if (!parsed.success) return "invalid";
     const mutation: Mutation = parsed.data;
+    const rule = this.rejectWhen?.(mutation) ?? false;
+    if (rule !== false) return rule === true ? "not_applicable" : rule;
     const tx = new RecordingTx(this.data);
     try {
-      if (this.rejectWhen?.(mutation)) throw new MutationRejectedError("Server-side rule");
       await applyMutation(tx, mutation);
     } catch (error) {
-      if (error instanceof MutationRejectedError) return false;
+      if (error instanceof MutationRejectedError) return "not_applicable";
       throw error;
     }
     this.commit(tx);
-    return true;
+    return undefined;
   }
 
   private commit(tx: RecordingTx): void {

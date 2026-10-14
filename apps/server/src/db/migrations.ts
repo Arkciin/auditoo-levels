@@ -75,4 +75,20 @@ export const migrations: readonly Migration[] = [
       ALTER TABLE server_meta ADD COLUMN epoch uuid NOT NULL DEFAULT gen_random_uuid();
     `,
   },
+  {
+    name: "003_rejected_mutations",
+    sql: /* sql */ `
+      -- The mutations rejected for each device, written with the acknowledgement. A push retried
+      -- after its response was lost finds them already processed: this is how the server can still
+      -- tell the device, which would otherwise drop them at its next pull without a word. Reasons
+      -- are codes (RejectionReason in packages/shared/src/protocol.ts), never user data.
+      CREATE TABLE rejected_mutations (
+        client_id uuid NOT NULL REFERENCES clients (id) ON DELETE CASCADE,
+        mutation_id bigint NOT NULL,
+        reason text NOT NULL,
+        rejected_at timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (client_id, mutation_id)
+      );
+    `,
+  },
 ];

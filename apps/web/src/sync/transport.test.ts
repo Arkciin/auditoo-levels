@@ -50,14 +50,24 @@ describe("createHttpTransport", () => {
   });
 
   it("pushes to /api/push", async () => {
-    const fetchMock = answering(JSON.stringify({ lastMutationId: 4, epoch: EPOCH }));
+    const answer = { lastMutationId: 4, epoch: EPOCH, rejected: [{ id: 3, reason: "invalid" }] };
+    const fetchMock = answering(JSON.stringify(answer));
     const transport = createHttpTransport({ fetch: fetchMock });
+
+    await expect(transport.push({ clientId: CLIENT, mutations: [] })).resolves.toEqual(answer);
+    expect(fetchMock).toHaveBeenCalledWith("/api/push", expect.anything());
+  });
+
+  it("reads the push answer of a server older than rejection reports", async () => {
+    const transport = createHttpTransport({
+      fetch: answering(JSON.stringify({ lastMutationId: 4, epoch: EPOCH })),
+    });
 
     await expect(transport.push({ clientId: CLIENT, mutations: [] })).resolves.toEqual({
       lastMutationId: 4,
       epoch: EPOCH,
+      rejected: [],
     });
-    expect(fetchMock).toHaveBeenCalledWith("/api/push", expect.anything());
   });
 
   it("reports a failed request as a NetworkError", async () => {

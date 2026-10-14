@@ -96,11 +96,37 @@ export interface PushRequest extends ReceivedPushRequest {
   mutations: Mutation[];
 }
 
+/**
+ * Why the server rejected a mutation (it still counts as processed: one bad mutation must not block
+ * a device's queue). A code, never user data: devices put it into words themselves.
+ * - `invalid`: its content breaks the rules of `mutationSchema` (e.g. it was written by another
+ *   version of the app, under rules that have changed since);
+ * - `not_applicable`: its mutator refused it (`MutationRejectedError`), e.g. its entity is unknown;
+ * - `refused_by_database`: the database refused it (SQLSTATE class 22 or 23).
+ */
+export type RejectionReason = "invalid" | "not_applicable" | "refused_by_database";
+
 export const pushResponseSchema = z.object({
   /** Highest mutation id the server has processed for this device. */
   lastMutationId: z.number().int().nonnegative(),
   /** The server's epoch. When it differs from the request's, nothing was processed. */
   epoch: idSchema,
+  /**
+   * The mutations of this push the server rejected: now, or when an earlier attempt processed them
+   * (that attempt's response may have been lost). Servers older than this field leave it out.
+   */
+  rejected: z
+    .array(
+      z.object({
+        id: mutationIdSchema,
+        /**
+         * A {@link RejectionReason}, read as any string: a device must keep syncing when a newer
+         * server adds a code it does not know yet (a failed parse would block its queue).
+         */
+        reason: z.string(),
+      }),
+    )
+    .default(() => []),
 });
 export type PushResponse = z.infer<typeof pushResponseSchema>;
 

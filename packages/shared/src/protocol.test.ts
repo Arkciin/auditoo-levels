@@ -6,7 +6,9 @@ import {
   type MutationEnvelope,
   mutationSchema,
   type PushRequest,
+  type PushResponse,
   pushRequestSchema,
+  pushResponseSchema,
   type ReceivedPushRequest,
 } from "./protocol";
 
@@ -79,5 +81,40 @@ describe("mutationSchema", () => {
       MutationArgs<"moveSpace">
     >();
     expectTypeOf<Mutation["name"]>().toEqualTypeOf<(typeof mutationNames)[number]>();
+  });
+});
+
+describe("pushResponseSchema", () => {
+  const EPOCH = "0199f0a0-0000-7000-8000-0000000000e1";
+
+  it("reports rejected mutations by id and reason, without user data", () => {
+    const response: PushResponse = {
+      lastMutationId: 3,
+      epoch: EPOCH,
+      rejected: [{ id: 2, reason: "not_applicable" }],
+    };
+    expect(pushResponseSchema.parse(response)).toEqual(response);
+  });
+
+  it("reads a response from a server older than rejection reports as rejecting nothing", () => {
+    expect(pushResponseSchema.parse({ lastMutationId: 3, epoch: EPOCH })).toEqual({
+      lastMutationId: 3,
+      epoch: EPOCH,
+      rejected: [],
+    });
+  });
+
+  it("accepts reasons this version does not know, so that a newer server cannot block a device", () => {
+    const parsed = pushResponseSchema.parse({
+      lastMutationId: 3,
+      epoch: EPOCH,
+      rejected: [{ id: 3, reason: "forbidden", detail: "ignored" }],
+    });
+    expect(parsed.rejected).toEqual([{ id: 3, reason: "forbidden" }]);
+  });
+
+  it("still refuses a rejection without a usable mutation id", () => {
+    const response = { lastMutationId: 3, epoch: EPOCH, rejected: [{ id: 0, reason: "invalid" }] };
+    expect(pushResponseSchema.safeParse(response).success).toBe(false);
   });
 });
