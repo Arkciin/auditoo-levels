@@ -2,7 +2,8 @@ import { defineConfig, devices } from "@playwright/test";
 
 // End-to-end tests run against the production server (API + built web app), so build first:
 // `pnpm build && pnpm e2e`.
-const PORT = 4174;
+// Overridable so several checkouts (e.g. git worktrees) can run their suites side by side.
+const PORT = Number(process.env.E2E_PORT ?? 4174);
 const baseURL = `http://localhost:${PORT}`;
 
 // Optional: a Chromium already on the machine instead of the one `playwright install` downloads.
