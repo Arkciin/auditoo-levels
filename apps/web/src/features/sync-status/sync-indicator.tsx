@@ -173,7 +173,12 @@ function SyncDetails() {
             : `${plural(descriptions.length, "modification", "modifications")} sur cet appareil`}
         </h3>
         {descriptions.length > 0 ? (
-          <ol className="max-h-[40dvh] overflow-y-auto border-t border-rule">
+          <ol
+            // biome-ignore lint/a11y/noNoninteractiveTabindex: it scrolls and holds nothing focusable: without a tab stop, a keyboard could not scroll it (WCAG 2.1.1)
+            tabIndex={0}
+            aria-labelledby="pending-title"
+            className="max-h-[40dvh] overflow-y-auto border-t border-rule"
+          >
             {descriptions.map((description, index) => (
               <li
                 // Descriptions are not unique and the list is append-only: the index is stable.
