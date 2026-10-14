@@ -773,7 +773,8 @@ export class SyncClient {
    */
   private report(rejections: readonly Rejection[], { fromOtherTab = false } = {}): void {
     if (rejections.length === 0 || this.disposed) return;
-    const newestFirst = rejections.toSorted((a, b) => b.at - a.at || b.mutationId - a.mutationId);
+    // Not `toSorted`: the app targets ES2022, for the older Safari found on tablets.
+    const newestFirst = [...rejections].sort((a, b) => b.at - a.at || b.mutationId - a.mutationId);
     this.publish({
       rejections: [...newestFirst, ...this.state.rejections].slice(0, MAX_RECENT_REJECTIONS),
     });
