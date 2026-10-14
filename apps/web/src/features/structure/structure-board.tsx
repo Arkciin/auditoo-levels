@@ -256,7 +256,6 @@ export function StructureBoard({
               level={level}
               spaceIds={containers[level.id] ?? []}
               spacesById={spacesById}
-              compact={active?.type === "level"}
               autoAdd={autoAddLevelId === level.id}
               onAutoAddHandled={onAutoAddHandled}
             />
@@ -285,7 +284,6 @@ function LevelSection({
   level,
   spaceIds,
   spacesById,
-  compact,
   autoAdd,
   onAutoAddHandled,
 }: {
@@ -293,8 +291,6 @@ function LevelSection({
   level: Level;
   spaceIds: readonly string[];
   spacesById: ReadonlyMap<string, Space>;
-  /** Rooms are hidden while levels are being reordered, so levels are easy to move. */
-  compact: boolean;
   autoAdd: boolean;
   onAutoAddHandled: () => void;
 }) {
@@ -423,24 +419,20 @@ function LevelSection({
           />
         </div>
       </SwipeToDelete>
-      {compact ? null : (
-        <>
-          <SortableContext items={[...spaceIds]} strategy={verticalListSortingStrategy}>
-            <ul aria-label={`Pièces du niveau ${level.name}`}>
-              {spaces.map((space) => (
-                <SpaceRow key={space.id} space={space} />
-              ))}
-            </ul>
-          </SortableContext>
-          <AddSpace
-            propertyId={propertyId}
-            level={level}
-            spaces={spaces}
-            open={adding}
-            onOpenChange={setAdding}
-          />
-        </>
-      )}
+      <SortableContext items={[...spaceIds]} strategy={verticalListSortingStrategy}>
+        <ul aria-label={`Pièces du niveau ${level.name}`}>
+          {spaces.map((space) => (
+            <SpaceRow key={space.id} space={space} />
+          ))}
+        </ul>
+      </SortableContext>
+      <AddSpace
+        propertyId={propertyId}
+        level={level}
+        spaces={spaces}
+        open={adding}
+        onOpenChange={setAdding}
+      />
     </section>
   );
 }
@@ -489,11 +481,19 @@ function SpaceRow({ space }: { space: Space }) {
             className="h-full flex-1"
             inputClassName="h-9"
           />
+          {/* Always there with a mouse; on touch screens it appears while renaming, as the
+              non-swipe way to delete (screen readers included). Pressing it must not blur the
+              rename field, or the field would close and take the button with it. */}
           <Button
             variant="ghost"
             size="icon"
-            className="hidden text-muted-foreground pointer-fine:inline-flex"
+            className={cn(
+              renaming
+                ? "text-destructive"
+                : "hidden text-muted-foreground pointer-fine:inline-flex",
+            )}
             aria-label={`Supprimer ${space.name}`}
+            onPointerDown={(event) => event.preventDefault()}
             onClick={() => void remove()}
           >
             <Trash />
