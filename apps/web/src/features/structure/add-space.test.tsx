@@ -150,6 +150,17 @@ describe("AddSpace", () => {
     await waitFor(() => expect(roomNames()).toEqual(["Dressing"]));
   });
 
+  it("adds the room still being typed when « Terminé » closes the field", async () => {
+    const user = renderLevel();
+    await openRoomField(user);
+
+    await user.type(roomField(), "Cuisine{Enter}Buanderie");
+    await user.click(screen.getByRole("button", { name: "Terminé" }));
+
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    await waitFor(() => expect(roomNames()).toEqual(["Cuisine", "Buanderie"]));
+  });
+
   it("closes with Escape or « Terminé »", async () => {
     const user = renderLevel();
 

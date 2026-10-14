@@ -61,6 +61,14 @@ export function AddSpace({
     [level.name, spaces],
   );
 
+  /** Adds the room typed in the field, if any, and empties the field. */
+  function addTyped() {
+    const name = draft.trim();
+    if (!name) return;
+    setDraft("");
+    add(() => name);
+  }
+
   function add(nameFor: (propertySpaceNames: readonly string[]) => string) {
     queue.current = queue.current.then(async () => {
       // The freshest state, not the last render: several taps can land before React re-renders.
@@ -100,10 +108,7 @@ export function AddSpace({
         className="flex gap-2"
         onSubmit={(event) => {
           event.preventDefault();
-          const name = draft.trim();
-          if (!name) return;
-          setDraft("");
-          add(() => name);
+          addTyped();
           inputRef.current?.focus();
         }}
       >
@@ -144,7 +149,16 @@ export function AddSpace({
           </button>
         ))}
       </fieldset>
-      <Button variant="ghost" size="sm" className="self-start" onClick={() => onOpenChange(false)}>
+      {/* The last room is often typed, then « Terminé » tapped instead of Enter: keep it. */}
+      <Button
+        variant="ghost"
+        size="sm"
+        className="self-start"
+        onClick={() => {
+          addTyped();
+          onOpenChange(false);
+        }}
+      >
         Terminé
       </Button>
     </div>

@@ -4,8 +4,10 @@ import {
   expect,
   expectLevels,
   expectRooms,
+  level,
   levelAction,
   moveRoomTo,
+  newRoomInput,
   nextFrames,
   reloadOnceSynced,
   renameInPlace,
@@ -48,11 +50,18 @@ test("add levels from the sheet and rooms by typing or from suggestions", async 
     await expect(structureSummary(page)).toHaveText("3 niveaux, 5 pièces");
   });
 
+  await test.step("« Terminé » keeps the room being typed", async () => {
+    await newRoomInput(page, "RDC").fill("Buanderie");
+    await level(page, "RDC").getByRole("button", { name: "Terminé", exact: true }).tap();
+    await expect(newRoomInput(page, "RDC")).toBeHidden();
+    await expectRooms(page, "RDC", ["Entrée", "Séjour", "Cuisine", "Buanderie"]);
+  });
+
   await test.step("everything is saved", async () => {
     await reloadOnceSynced(page);
     await expectLevels(page, ["Sous-sol", "RDC", "R+1"]);
     await expectRooms(page, "Sous-sol", []);
-    await expectRooms(page, "RDC", ["Entrée", "Séjour", "Cuisine"]);
+    await expectRooms(page, "RDC", ["Entrée", "Séjour", "Cuisine", "Buanderie"]);
     await expectRooms(page, "R+1", ["Chambre 1", "Chambre 2"]);
   });
 });
