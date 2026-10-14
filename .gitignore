@@ -13,3 +13,6 @@ coverage/
 /apps/web/playwright-report/
 /apps/web/blob-report/
 /.lighthouse/
+
+# Local agent worktrees and settings
+/.claude/
