@@ -3,13 +3,64 @@ import { serwist } from "@serwist/vite";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defineConfig, type HtmlTagDescriptor, type Plugin } from "vite";
 
 const srcDir = fileURLToPath(new URL("./src", import.meta.url));
 const outDir = fileURLToPath(new URL("./dist", import.meta.url));
 
+/**
+ * The router splits each screen from the entry and requests it once the app runs, that is after
+ * the entry has loaded and IndexedDB has opened. `modulepreload` the home screen and the chunks it
+ * imports (layout, sheets and menus, shared by every screen) next to the entry instead: on a slow
+ * connection, that takes a round trip and a download off the first render.
+ */
+function preloadHomeScreen(): Plugin {
+  return {
+    name: "releve:preload-home-screen",
+    apply: "build",
+    transformIndexHtml: {
+      order: "post",
+      handler(html, { bundle }) {
+        const chunks = Object.values(bundle ?? {}).filter((output) => output.type === "chunk");
+        const home = chunks.find((chunk) =>
+          chunk.facadeModuleId?.endsWith("/src/routes/index.tsx?tsr-split=component"),
+        );
+        if (!home) throw new Error("No chunk for the home screen (src/routes/index.tsx)");
+        const scripts = [home.fileName, ...home.imports]
+          .filter((file) => !html.includes(`/${file}"`))
+          .map(
+            (file): HtmlTagDescriptor => ({
+              tag: "link",
+              attrs: { rel: "modulepreload", crossorigin: true, href: `/${file}` },
+              injectTo: "head",
+            }),
+          );
+        // The typeface's Latin subset, which every French screen uses: otherwise only requested
+        // once the stylesheet has loaded and text is laid out, and the text then swaps fonts.
+        const font = Object.keys(bundle ?? {}).find((file) =>
+          /atkinson-hyperlegible-next-latin-wght-normal-[\w-]+\.woff2$/.test(file),
+        );
+        if (!font) throw new Error("No Latin subset of Atkinson Hyperlegible Next in the build");
+        const fontTag: HtmlTagDescriptor = {
+          tag: "link",
+          attrs: {
+            rel: "preload",
+            as: "font",
+            type: "font/woff2",
+            crossorigin: true,
+            href: `/${font}`,
+          },
+          injectTo: "head",
+        };
+        return [...scripts, fontTag];
+      },
+    },
+  };
+}
+
 export default defineConfig({
   plugins: [
+    preloadHomeScreen(),
     // Must run before react(): generates src/routeTree.gen.ts and splits each route into its
     // own chunk.
     tanstackRouter({ target: "react", autoCodeSplitting: true }),
