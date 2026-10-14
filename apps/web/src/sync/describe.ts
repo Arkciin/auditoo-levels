@@ -336,7 +336,10 @@ function renamed(kind: EntityKind, before: string | undefined, after: string): s
   return `${renamedEntity} ${verb} en ${quote(after)}`;
 }
 
-/** French quotation marks, with the non-breaking spaces French typography requires inside. */
-function quote(text: string): string {
+/**
+ * French quotation marks, with the non-breaking spaces French typography requires inside:
+ * « Cuisine ». The one helper for the whole UI.
+ */
+export function quote(text: string): string {
   return `«\u00a0${text}\u00a0»`;
 }

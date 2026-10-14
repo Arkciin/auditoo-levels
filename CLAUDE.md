@@ -78,8 +78,8 @@ pnpm vitest run apps/web/src/sync/convergence.test.ts
 - **Comments explain why** (a constraint, a trap, a tradeoff), not what the next line does. Keep
   existing comments true when you change the code under them.
 - **French UI, English code.** UI copy is French (the users are French diagnosticians); code,
-  comments, commits and docs are English. Use `quote()` for « … » with non-breaking spaces and
-  `plural()` for counts ("3 pièces").
+  comments, commits and docs are English. Use `quote()` (`apps/web/src/sync/describe.ts`, the only
+  one) for « … » with non-breaking spaces and `plural()` for counts ("3 pièces").
 - **Touch first.** `Button` sizes give 44 px targets; inputs keep `text-base` (16 px, or iOS zooms
   in); interactive elements inside a swipeable row get `data-no-swipe`; every control has an
   accessible French name, which the e2e tests select by.

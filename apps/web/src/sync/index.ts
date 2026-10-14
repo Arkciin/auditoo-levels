@@ -8,6 +8,7 @@ export {
   describeMutationError,
   describePendingMutations,
   describeRejection,
+  quote,
 } from "./describe";
 export {
   SyncProvider,
