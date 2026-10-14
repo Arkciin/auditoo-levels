@@ -119,6 +119,37 @@ describe("SyncClient", () => {
     expect(server.snapshot().properties.get(P1)?.name).toBe("12 rue des Lilas");
   });
 
+  it("is sending only from the push of pending changes to the end of its cycle", async () => {
+    const network = new MemoryTransport(new MemoryServer());
+    const seen: string[] = [];
+    let client: SyncClient | undefined;
+    const sending = () => (client?.getState().status.sending ? "sending" : "quiet");
+    const transport: Transport = {
+      push: (request) => {
+        seen.push(`push: ${sending()}`);
+        return network.push(request);
+      },
+      pull: (request) => {
+        seen.push(`pull: ${sending()}`);
+        return network.pull(request);
+      },
+    };
+    client = await createClient({ indexedDB: new IDBFactory(), transport });
+
+    await client.syncNow(); // Nothing to send: a pull, the periodic one or one after a poke.
+    expect(seen).toEqual(["pull: quiet"]);
+
+    await client.mutate("createProperty", { id: P1, name: "Maison" });
+    await client.syncNow();
+    expect(seen).toEqual(["pull: quiet", "push: sending", "pull: sending"]);
+    expect(client.getState().status).toMatchObject({ sending: false, phase: "idle" });
+
+    network.mode = "offline"; // A failed cycle stops sending too.
+    await client.mutate("renameProperty", { id: P1, name: "Villa" });
+    await client.syncNow();
+    expect(client.getState().status).toMatchObject({ sending: false, pendingCount: 1 });
+  });
+
   it("publishes immutable states and keeps the view when a pull brings nothing new", async () => {
     const { client } = await createDevice(new MemoryServer());
     const initial = client.getState();

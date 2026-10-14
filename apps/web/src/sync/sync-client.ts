@@ -54,11 +54,18 @@ export interface SyncStatus {
    */
   readonly connection: "online" | "offline";
   /**
-   * `"syncing"` while a push/pull cycle runs; `"error"` when the last cycle failed for a reason
-   * other than connectivity (the server rejected the request or answered garbage). Being offline
-   * is a normal condition for this app, not an error.
+   * `"syncing"` while a push/pull cycle runs, background pulls included; `"error"` when the last
+   * cycle failed for a reason other than connectivity (the server rejected the request or answered
+   * garbage). Being offline is a normal condition for this app, not an error.
    */
   readonly phase: "idle" | "syncing" | "error";
+  /**
+   * Local changes are on their way to the server: from the moment a cycle starts pushing pending
+   * mutations until it ends with the pull that confirms them. A cycle with nothing to send (the
+   * periodic pull, a poke) leaves it false, so that the UI only shows activity when the user's
+   * own work is moving.
+   */
+  readonly sending: boolean;
   /** Local mutations not confirmed by the server yet. */
   readonly pendingCount: number;
   /** End of the last successful cycle (epoch ms), `null` until the first one. */
@@ -244,6 +251,7 @@ export class SyncClient {
 
   // Inputs of `status`, which `publish()` derives from them.
   private phase: SyncStatus["phase"] = "idle";
+  private sending = false;
   private networkDown = false;
   private lastSyncedAt: number | null = null;
   private lastError: string | null = null;
@@ -488,6 +496,7 @@ export class SyncClient {
     if (this.disposed) return "ok";
     this.failures = 0;
     this.phase = "idle";
+    this.sending = false;
     this.lastError = null;
     this.lastSyncedAt = this.now();
     this.publish();
@@ -512,6 +521,10 @@ export class SyncClient {
     for (;;) {
       const mutations = await this.storage.readOutbox(this.lastAckedId, MAX_MUTATIONS_PER_PUSH);
       if (mutations.length === 0) return;
+      if (!this.sending) {
+        this.sending = true;
+        this.publish();
+      }
       const response = await this.transport.push(
         { clientId: this.clientId, epoch: this.epoch ?? undefined, mutations },
         { signal },
@@ -620,6 +633,7 @@ export class SyncClient {
 
   private recordFailure(error: unknown): void {
     this.failures += 1;
+    this.sending = false;
     if (error instanceof NetworkError) {
       this.networkDown = true;
       this.phase = "idle";
@@ -712,6 +726,7 @@ export class SyncClient {
     const next: SyncStatus = {
       connection: this.networkDown || !this.isOnline() ? "offline" : "online",
       phase: this.phase,
+      sending: this.sending,
       pendingCount,
       lastSyncedAt: this.lastSyncedAt,
       lastError: this.lastError,
@@ -959,6 +974,7 @@ function sameStatus(a: SyncStatus, b: SyncStatus): boolean {
   return (
     a.connection === b.connection &&
     a.phase === b.phase &&
+    a.sending === b.sending &&
     a.pendingCount === b.pendingCount &&
     a.lastSyncedAt === b.lastSyncedAt &&
     a.lastError === b.lastError

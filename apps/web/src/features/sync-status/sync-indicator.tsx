@@ -70,7 +70,8 @@ export function presentStatus(status: SyncStatus): StatusPresentation {
       explanation: `${message}${followUp}`,
     };
   }
-  if (status.phase === "syncing") {
+  // Only the user's own work on its way: a pull (every 30 s, after each poke) stays silent.
+  if (status.sending) {
     return {
       tone: "syncing",
       icon: RefreshCw,

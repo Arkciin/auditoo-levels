@@ -1,10 +1,17 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpError, SyncProvider, type SyncStatus, type Transport } from "@/sync";
 import type { SyncClient } from "@/sync/sync-client";
-import { MemoryServer, openTestClient, TestDevice, uuid } from "@/sync/test-support/harness";
+import {
+  deferred,
+  MemoryServer,
+  MemoryTransport,
+  openTestClient,
+  TestDevice,
+  uuid,
+} from "@/sync/test-support/harness";
 import { presentStatus, SyncIndicator } from "./sync-indicator";
 
 const RETRY_PROMISE =
@@ -14,6 +21,7 @@ function status(overrides: Partial<SyncStatus> = {}): SyncStatus {
   return {
     connection: "online",
     phase: "idle",
+    sending: false,
     pendingCount: 0,
     lastSyncedAt: null,
     lastError: null,
@@ -32,11 +40,26 @@ describe("presentStatus", () => {
       "Modifications en attente",
     ],
     [
-      "a sync running",
-      status({ phase: "syncing", pendingCount: 2 }),
+      "changes being sent",
+      status({ phase: "syncing", sending: true, pendingCount: 2 }),
       "syncing",
       "Envoi…",
       "Synchronisation en cours",
+    ],
+    // The periodic pull and the pull after a poke: nothing of the user's is moving.
+    [
+      "a pull, nothing to send",
+      status({ phase: "syncing" }),
+      "synced",
+      "À jour",
+      "Tout est à jour",
+    ],
+    [
+      "a pull, changes already sent but not confirmed yet",
+      status({ phase: "syncing", pendingCount: 2 }),
+      "pending",
+      "En attente",
+      "Modifications en attente",
     ],
     ["a failed sync", status({ phase: "error" }), "error", "Erreur", "La synchronisation a échoué"],
     [
@@ -115,6 +138,59 @@ describe("SyncIndicator", () => {
 
     expect(pill()).toHaveAccessibleName("Tout est à jour. Voir le détail");
     expect(pill()).toHaveTextContent("À jour");
+  });
+
+  it("stays quiet while it pulls, and says « Envoi… » only while changes are on their way", async () => {
+    const network = new MemoryTransport(new MemoryServer());
+    let held: { started: ReturnType<typeof deferred>; release: ReturnType<typeof deferred> };
+    const hold = () => {
+      held = { started: deferred(), release: deferred() };
+      return held;
+    };
+    hold().release.resolve();
+    const transport: Transport = {
+      push: async (request) => {
+        held.started.resolve();
+        await held.release.promise;
+        return network.push(request);
+      },
+      pull: async (request) => {
+        held.started.resolve();
+        await held.release.promise;
+        return network.pull(request);
+      },
+    };
+    const device = await openTestClient({ indexedDB: new IDBFactory(), transport });
+    await device.syncNow();
+    renderIndicator(device);
+
+    // The periodic pull, or the one after a poke: nothing of the user's is moving. (`act` lets
+    // React render the cycle's status before the pill is read.)
+    const pull = hold();
+    try {
+      await act(async () => {
+        void device.syncNow();
+        await pull.started.promise;
+      });
+      expect(device.getState().status.phase).toBe("syncing");
+      expect(pill()).toHaveTextContent("À jour");
+    } finally {
+      pull.release.resolve();
+    }
+    await waitFor(() => expect(device.getState().status.phase).toBe("idle"));
+
+    await device.mutate("createProperty", { id: uuid(1), name: "Maison" });
+    const push = hold();
+    try {
+      await act(async () => {
+        void device.syncNow();
+        await push.started.promise;
+      });
+      expect(pill()).toHaveTextContent("Envoi…");
+    } finally {
+      push.release.resolve();
+    }
+    await waitFor(() => expect(pill()).toHaveTextContent("À jour"));
   });
 
   // Counts are joined to their noun by a non-breaking space ("3 modifications"), as in French print.

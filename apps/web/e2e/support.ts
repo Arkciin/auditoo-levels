@@ -99,7 +99,8 @@ export function syncPill(page: Page): Locator {
 }
 
 /**
- * Nothing is waiting for the server: every change this device made is saved there.
+ * Nothing is waiting for the server: every change this device made is saved there. It says
+ * nothing of pulls: the pill stays « À jour » while one runs.
  *
  * Only meaningful once the last change is on screen (its mutation is then queued): before that,
  * the pill may still show the state from before the change.
@@ -172,10 +173,15 @@ export function backToList(page: Page): Promise<void> {
 
 /** Creates a logement with the "Nouveau logement" sheet; ends on its (empty) structure screen. */
 export async function createProperty(page: Page, name: string): Promise<void> {
+  const firstPull = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/pull",
+  );
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1, name: "Logements" })).toBeVisible();
   // The first sync may swap the empty state (it has its own "Nouveau logement" button) for the
-  // list. Afterwards the screen only changes when another test adds a logement.
+  // list. Afterwards the screen only changes when another test adds a logement. (The pill stays
+  // « À jour » during a pull: its answer tells when.)
+  await firstPull;
   await expectSynced(page);
   await page.getByRole("button", { name: "Nouveau logement", exact: true }).last().tap();
   const sheet = page.getByRole("dialog", { name: "Nouveau logement" });
