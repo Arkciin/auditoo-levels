@@ -6,9 +6,13 @@ import { createRoot } from "react-dom/client";
 import { toast } from "sonner";
 
 import { StorageUnavailable } from "./components/storage-unavailable";
+import { captureInstallPrompt } from "./install";
 import { registerServiceWorker } from "./pwa";
 import { routeTree } from "./routeTree.gen";
 import { createBrowserSyncClient, SyncProvider } from "./sync";
+
+// Before anything is awaited: the browser offers installation once, possibly very early.
+captureInstallPrompt();
 
 const router = createRouter({
   routeTree,
@@ -42,10 +46,15 @@ try {
   root.render(<StorageUnavailable />);
 }
 
-void registerServiceWorker((apply) => {
-  toast("Une nouvelle version de Relevé est disponible.", {
-    id: "app-update",
-    duration: Number.POSITIVE_INFINITY,
-    action: { label: "Mettre à jour", onClick: apply },
-  });
+void registerServiceWorker({
+  onUpdateReady: (apply) => {
+    toast("Une nouvelle version de Relevé est disponible.", {
+      id: "app-update",
+      duration: Number.POSITIVE_INFINITY,
+      action: { label: "Mettre à jour", onClick: apply },
+    });
+  },
+  onOfflineReady: () => {
+    toast.success("Relevé fonctionne maintenant sans réseau.", { id: "offline-ready" });
+  },
 });

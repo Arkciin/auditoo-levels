@@ -4,9 +4,13 @@ import {
   expect,
   expectLevels,
   expectRooms,
+  levelAction,
+  moveRoomTo,
+  nextFrames,
   reloadOnceSynced,
   renameInPlace,
   room,
+  roomAction,
   roomName,
   roomSuggestion,
   structureSummary,
@@ -99,5 +103,111 @@ test("rename a room in place, undo the deletion of a room or a level", async ({ 
     await expectLevels(page, ["RDC", "R+1"]);
     await expectRooms(page, "RDC", ["Entrée", "Salon", "Cuisine"]);
     await expectRooms(page, "R+1", ["Chambre 1", "Chambre 2"]);
+  });
+});
+
+test("the room suggestions stay within reach as rooms pile up above them", async ({ page }) => {
+  await createProperty(page, uniqueName("Immeuble"));
+  await addLevel(page, "R+1");
+  const chip = roomSuggestion(page, "R+1", "Chambre");
+  const actionBar = page.getByRole("button", { name: "Ajouter un niveau", exact: true });
+
+  const names: string[] = [];
+  for (let n = 1; n <= 14; n++) {
+    // Where a thumb would find it, without scrolling: never under the bottom bar.
+    const [chipBox, barBox] = await Promise.all([chip.boundingBox(), actionBar.boundingBox()]);
+    if (!chipBox || !barBox) throw new Error("The suggestion and the bar should be visible");
+    expect(chipBox.y + chipBox.height).toBeLessThanOrEqual(barBox.y);
+    await chip.tap();
+    names.push(`Chambre ${n}`);
+    await expectRooms(page, "R+1", names);
+    await nextFrames(page);
+  }
+});
+
+test("act on a room from its menu: move it to another level, rename it, delete it", async ({
+  page,
+}) => {
+  await createProperty(page, uniqueName("Maison"));
+  await addLevel(page, "RDC");
+  await typeRooms(page, "RDC", ["Entrée", "Bureau", "Cuisine"]);
+
+  await test.step("with a single level, there is nowhere to move a room to", async () => {
+    await page.getByRole("button", { name: "Actions de la pièce Bureau", exact: true }).tap();
+    await expect(page.getByRole("menuitem", { name: "Déplacer vers…" })).toBeDisabled();
+    await page.keyboard.press("Escape");
+  });
+
+  await addLevel(page, "R+1");
+  await typeRooms(page, "R+1", ["Chambre 1"]);
+  const moved = "Pièce « Bureau » déplacée vers « R+1 »";
+
+  await test.step("« Déplacer vers… » sends the room to the end of the level picked", async () => {
+    await moveRoomTo(page, "Bureau", "R+1");
+    await expect(toast(page, moved)).toBeVisible();
+    await expectRooms(page, "RDC", ["Entrée", "Cuisine"]);
+    await expectRooms(page, "R+1", ["Chambre 1", "Bureau"]);
+  });
+
+  await test.step("undo puts it back where it was", async () => {
+    await undo(page, moved);
+    await expectRooms(page, "RDC", ["Entrée", "Bureau", "Cuisine"]);
+    await expectRooms(page, "R+1", ["Chambre 1"]);
+  });
+
+  await test.step("rename and delete from the menu too", async () => {
+    await roomAction(page, "Cuisine", "Renommer");
+    const field = page.getByRole("textbox", { name: "Nom de la pièce", exact: true });
+    await expect(field).toBeFocused();
+    await field.fill("Cuisine ouverte");
+    await field.press("Enter");
+    await expectRooms(page, "RDC", ["Entrée", "Bureau", "Cuisine ouverte"]);
+
+    await roomAction(page, "Entrée", "Supprimer la pièce");
+    await expect(toast(page, "Pièce « Entrée » supprimée")).toBeVisible();
+    await expectRooms(page, "RDC", ["Bureau", "Cuisine ouverte"]);
+  });
+
+  await test.step("a move is saved like any change", async () => {
+    await moveRoomTo(page, "Bureau", "R+1");
+    await expectRooms(page, "R+1", ["Chambre 1", "Bureau"]);
+    await reloadOnceSynced(page);
+    await expectRooms(page, "RDC", ["Cuisine ouverte"]);
+    await expectRooms(page, "R+1", ["Chambre 1", "Bureau"]);
+  });
+});
+
+test("duplicate a level with its rooms, then undo a copy", async ({ page }) => {
+  await createProperty(page, uniqueName("Immeuble"));
+  await addLevel(page, "RDC");
+  await typeRooms(page, "RDC", ["Entrée", "Séjour"]);
+  await addLevel(page, "R+1");
+  await typeRooms(page, "R+1", ["Chambre 1", "Chambre 2", "Salle de bain"]);
+  await expect(structureSummary(page)).toHaveText("2 niveaux, 5 pièces");
+
+  await test.step("a floor becomes the next floor, its bedrooms numbered after the others", async () => {
+    await levelAction(page, "R+1", "Dupliquer le niveau");
+    await expect(toast(page, "Niveau « R+1 » dupliqué en « R+2 » avec ses 3 pièces")).toBeVisible();
+    await expectLevels(page, ["RDC", "R+1", "R+2"]);
+    await expectRooms(page, "R+2", ["Chambre 3", "Chambre 4", "Salle de bain"]);
+    await expect(structureSummary(page)).toHaveText("3 niveaux, 8 pièces");
+  });
+
+  await test.step("another level is copied right after it; undo takes the copy back", async () => {
+    const message = "Niveau « RDC » dupliqué en « RDC (copie) » avec ses 2 pièces";
+    await levelAction(page, "RDC", "Dupliquer le niveau");
+    await expectLevels(page, ["RDC", "RDC (copie)", "R+1", "R+2"]);
+    await expectRooms(page, "RDC (copie)", ["Entrée", "Séjour"]);
+
+    await undo(page, message);
+    await expectLevels(page, ["RDC", "R+1", "R+2"]);
+    await expect(structureSummary(page)).toHaveText("3 niveaux, 8 pièces");
+  });
+
+  await test.step("everything is saved", async () => {
+    await reloadOnceSynced(page);
+    await expectLevels(page, ["RDC", "R+1", "R+2"]);
+    await expectRooms(page, "R+1", ["Chambre 1", "Chambre 2", "Salle de bain"]);
+    await expectRooms(page, "R+2", ["Chambre 3", "Chambre 4", "Salle de bain"]);
   });
 });

@@ -2,6 +2,7 @@
  * Naming helpers that make data entry fast on site: French housing vocabulary, smart numbering
  * ("Chambre 3") and a sensible default place for a new level ("Sous-sol" goes below "RDC").
  */
+import { NAME_MAX_LENGTH } from "@repo/shared";
 
 const BASEMENT_RANK = -1;
 const GROUND_RANK = 0;
@@ -71,6 +72,77 @@ export function levelInsertIndex(levels: readonly { name: string }[], name: stri
     return other !== null && other > rank;
   });
   return firstAbove >= 0 ? firstAbove : levels.length;
+}
+
+/**
+ * Name of a copy of the level `source`, given the property's level names. A floor becomes the next
+ * free floor above it, in the source's spelling ("R+1" becomes "R+2", or "R+3" when "R+2" exists;
+ * "1er étage" becomes "2e étage"): identical floors are what inspectors copy. Any other level
+ * becomes "RDC (copie)", then "RDC (copie 2)"…
+ */
+export function duplicateLevelName(source: string, existing: readonly string[]): string {
+  const rank = levelRank(source);
+  if (rank === null || rank <= GROUND_RANK || rank >= ATTIC_RANK) return copyName(source, existing);
+  const taken = new Set(existing.map(levelRank));
+  let floor = rank + 1;
+  while (taken.has(floor)) floor += 1;
+  const respelled = source.replace(/\d+/, String(floor)).replace(/^(\d+)(?:er|re)(?=\s|$)/i, "$1e"); // "1er étage" → "2e étage"
+  return levelRank(respelled) === floor ? respelled : `R+${floor}`;
+}
+
+/**
+ * Where the copy of the level at `sourceIndex` goes among `levels`: a floor where floors belong
+ * ("R+2" above "R+1", below the attic), anything else right after its source.
+ */
+export function duplicateLevelIndex(
+  levels: readonly { name: string }[],
+  sourceIndex: number,
+  copy: string,
+): number {
+  return levelRank(copy) === null ? sourceIndex + 1 : levelInsertIndex(levels, copy);
+}
+
+const COPY_SUFFIX = / \(copie(?: \d+)?\)$/i;
+
+function copyName(source: string, existing: readonly string[]): string {
+  const base = source.replace(COPY_SUFFIX, "");
+  const taken = new Set(existing.map(normalize));
+  for (let n = 1; ; n++) {
+    const suffix = n === 1 ? " (copie)" : ` (copie ${n})`;
+    const name = `${truncate(base, NAME_MAX_LENGTH - suffix.length)}${suffix}`;
+    if (!taken.has(normalize(name))) return name;
+  }
+}
+
+/** At most `max` UTF-16 code units, never splitting a character (an emoji, say) in two. */
+function truncate(text: string, max: number): string {
+  if (text.length <= max) return text;
+  let result = "";
+  for (const character of text) {
+    if (result.length + character.length > max) break;
+    result += character;
+  }
+  return result.trimEnd();
+}
+
+/**
+ * Names of the rooms of a level copy, in order, given every room name of the property. Rooms
+ * always numbered ("Chambre 2") take the next free numbers, so that each bedroom of the logement
+ * keeps its own; the others keep their name, so that the copy reads like its source.
+ */
+export function duplicateSpaceNames(
+  source: readonly string[],
+  propertyNames: readonly string[],
+): string[] {
+  const names = [...propertyNames];
+  return source.map((name) => {
+    const bare = normalize(name).replace(/ \d+$/, "");
+    const base = [...ALWAYS_NUMBERED].find((numbered) => normalize(numbered) === bare);
+    if (base === undefined) return name;
+    const renumbered = nextSpaceName(base, names);
+    names.push(renumbered);
+    return renumbered;
+  });
 }
 
 const SPACES_BY_KIND = {

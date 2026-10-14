@@ -51,6 +51,19 @@ export class MutationRejectedError extends Error {
 
 const entityRef = z.object({ id: idSchema });
 
+/**
+ * Most rooms a level copy carries. It bounds the mutation, hence the push it travels in (see
+ * `MAX_BODY_BYTES` on the server), and is far above any real level.
+ */
+export const MAX_DUPLICATED_SPACES = 100;
+
+/** A room of a level copy: a new id, a name (numbered by the device) and a position. */
+const duplicatedSpaceSchema = z.object({
+  id: idSchema,
+  name: nameSchema,
+  position: positionSchema,
+});
+
 export const mutationArgsSchemas = {
   createProperty: z.object({ id: idSchema, name: nameSchema }),
   renameProperty: z.object({ id: idSchema, name: nameSchema }),
@@ -67,6 +80,24 @@ export const mutationArgsSchemas = {
   moveLevel: z.object({ id: idSchema, position: positionSchema }),
   deleteLevel: entityRef,
   restoreLevel: entityRef,
+  duplicateLevel: z
+    .object({
+      id: idSchema,
+      sourceId: idSchema,
+      name: nameSchema,
+      position: positionSchema,
+      spaces: z
+        .array(duplicatedSpaceSchema)
+        .max(
+          MAX_DUPLICATED_SPACES,
+          `Un niveau de plus de ${MAX_DUPLICATED_SPACES}\u00a0pièces ne peut pas être dupliqué`,
+        ),
+    })
+    .refine(
+      ({ id, sourceId, spaces }) =>
+        new Set([id, sourceId, ...spaces.map((space) => space.id)]).size === spaces.length + 2,
+      "A level copy needs distinct ids, other than its source's",
+    ),
 
   createSpace: z.object({
     id: idSchema,
@@ -138,6 +169,26 @@ export const mutators: { readonly [N in MutationName]: Mutator<N> } = {
 
   async restoreLevel(tx, { id }) {
     await reviveLevel(tx, id);
+  },
+
+  async duplicateLevel(tx, { id, sourceId, name, position, spaces }) {
+    // The rooms travel as arguments, named and positioned by the device: the copy is what the user
+    // saw, whatever another device did to the source meanwhile. All of it is one mutation, so one
+    // transaction on the server: the level never exists without its rooms, and one undo (deleting
+    // the copy) takes everything back. The source is only read: copying it is not editing it, so
+    // a source deleted meanwhile stays deleted.
+    const source = await requireLevel(tx, sourceId);
+    await reviveProperty(tx, source.propertyId);
+    await tx.putLevel({ id, propertyId: source.propertyId, name, position, deletedAt: null });
+    for (const space of spaces) {
+      await tx.putSpace({
+        id: space.id,
+        levelId: id,
+        name: space.name,
+        position: space.position,
+        deletedAt: null,
+      });
+    }
   },
 
   async createSpace(tx, { id, levelId, name, position }) {

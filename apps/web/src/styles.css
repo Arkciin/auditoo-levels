@@ -164,6 +164,10 @@
     color-scheme: light dark;
     /* No pull-to-refresh or scroll chaining: they would fight drag-and-drop gestures. */
     overscroll-behavior-y: none;
+    /* What gets scrolled into view (a level just copied, a control reached with Tab) stays clear
+       of the sticky header and of the bottom action bar. */
+    scroll-padding-top: calc(3.5rem + env(safe-area-inset-top));
+    scroll-padding-bottom: calc(var(--action-bar-height) + env(safe-area-inset-bottom));
   }
 
   body {

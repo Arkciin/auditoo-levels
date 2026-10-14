@@ -84,6 +84,12 @@ export function describePendingMutations(
       case "renameLevel":
         levelNames.set(mutation.args.id, mutation.args.name);
         break;
+      case "duplicateLevel":
+        levelNames.set(mutation.args.id, mutation.args.name);
+        for (const space of mutation.args.spaces) {
+          spaces.set(space.id, { name: space.name, levelId: mutation.args.id });
+        }
+        break;
       case "createSpace":
         spaces.set(mutation.args.id, { name: mutation.args.name, levelId: mutation.args.levelId });
         break;
@@ -128,6 +134,11 @@ function describe(mutation: Mutation, names: NameLookup): string {
       return `${subject("level", names.level(mutation.args.id))} supprimé`;
     case "restoreLevel":
       return `${subject("level", names.level(mutation.args.id))} restauré`;
+    case "duplicateLevel": {
+      const source = subject("level", names.level(mutation.args.sourceId));
+      const rooms = withRooms(mutation.args.spaces.length);
+      return `${source} dupliqué en ${quote(mutation.args.name)}${rooms}`;
+    }
 
     case "createSpace":
       return `${subject("space", mutation.args.name)} ajoutée`;
@@ -254,6 +265,8 @@ function notDone(mutation: Mutation, names: NameLookup): string {
       return fail("level", names.level(mutation.args.id), "supprimé");
     case "restoreLevel":
       return fail("level", names.level(mutation.args.id), "restauré");
+    case "duplicateLevel":
+      return fail("level", names.level(mutation.args.sourceId), "dupliqué");
 
     case "createSpace":
       return fail("space", mutation.args.name, "ajoutée");
@@ -321,6 +334,10 @@ function missingEntity(mutation: Mutation, state: Snapshot): string | undefined 
       const found = state.levels.get(mutation.args.id);
       return found ? property(found.propertyId) : "il n'existe plus";
     }
+    case "duplicateLevel": {
+      const source = state.levels.get(mutation.args.sourceId);
+      return source ? property(source.propertyId) : "il n'existe plus";
+    }
     case "createSpace":
       return level(mutation.args.levelId);
     case "renameSpace":
@@ -347,6 +364,12 @@ function missingEntity(mutation: Mutation, state: Snapshot): string | undefined 
 /** « Pièce « Cuisine » », or just « Pièce » when the name is unknown. */
 function subject(kind: EntityKind, name: string | undefined): string {
   return name === undefined ? NOUNS[kind] : `${NOUNS[kind]} ${quote(name)}`;
+}
+
+/** « avec ses 3 pièces », « avec sa pièce », or nothing for a level without rooms. */
+function withRooms(count: number): string {
+  if (count === 0) return "";
+  return count === 1 ? " avec sa pièce" : ` avec ses ${count}\u00a0pièces`;
 }
 
 function renamed(kind: EntityKind, before: string | undefined, after: string): string {

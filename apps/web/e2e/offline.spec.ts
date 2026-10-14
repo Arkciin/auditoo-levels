@@ -9,9 +9,24 @@ import {
   roomName,
   syncPill,
   test,
+  toast,
   typeRooms,
   uniqueName,
 } from "./support";
+
+test("the app says it works offline once installed, and only then", async ({ page }) => {
+  const message = "Relevé fonctionne maintenant sans réseau.";
+  // Every test starts in a new browser context: this is the first visit, which installs the worker.
+  await page.goto("/");
+  await expect(toast(page, message)).toBeVisible({ timeout: 15_000 });
+
+  // The worker was already active when this page loaded: nothing new to announce.
+  await page.reload();
+  await page.waitForLoadState("load");
+  await page.evaluate(() => navigator.serviceWorker.ready);
+  await page.waitForTimeout(1_500);
+  await expect(toast(page, message)).toHaveCount(0);
+});
 
 test("edits made offline survive a reload and sync once back online", async ({
   page,

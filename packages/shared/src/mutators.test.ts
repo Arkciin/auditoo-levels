@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { MutationRejectedError } from "./mutators";
+import { MAX_DUPLICATED_SPACES, MutationRejectedError, mutationArgsSchemas } from "./mutators";
 import type { Mutation } from "./protocol";
 import { applyMutations, emptySnapshot, type Snapshot } from "./snapshot";
 
@@ -136,6 +136,113 @@ describe("mutators", () => {
       );
       expect(onRejected).toHaveBeenCalledOnce();
       expect(snapshot.spaces.get(KITCHEN)?.levelId).toBe(RDC);
+    });
+  });
+
+  describe("duplicateLevel", () => {
+    const COPY = "0199f0a0-0000-7000-8000-000000000014";
+    const COPIED_KITCHEN = "0199f0a0-0000-7000-8000-000000000031";
+    const COPIED_WC = "0199f0a0-0000-7000-8000-000000000032";
+    const args = {
+      id: COPY,
+      sourceId: RDC,
+      name: "RDC (copie)",
+      position: "a0V",
+      spaces: [
+        { id: COPIED_KITCHEN, name: "Cuisine", position: "a0" },
+        { id: COPIED_WC, name: "WC", position: "a1" },
+      ],
+    };
+    const duplicate = (timestamp?: number) => m({ name: "duplicateLevel", args }, timestamp);
+
+    it("creates the copy and its rooms in the source's property, in one mutation", async () => {
+      const before = await build();
+      const after = await applyMutations(before, [duplicate()]);
+
+      expect(after.levels.get(COPY)).toEqual({
+        id: COPY,
+        propertyId: PROPERTY,
+        name: "RDC (copie)",
+        position: "a0V",
+        deletedAt: null,
+      });
+      expect([...after.spaces.values()].filter((space) => space.levelId === COPY)).toEqual([
+        { id: COPIED_KITCHEN, levelId: COPY, name: "Cuisine", position: "a0", deletedAt: null },
+        { id: COPIED_WC, levelId: COPY, name: "WC", position: "a1", deletedAt: null },
+      ]);
+      // The source and its rooms are only read.
+      expect(after.levels.get(RDC)).toBe(before.levels.get(RDC));
+      expect(after.spaces.get(KITCHEN)).toBe(before.spaces.get(KITCHEN));
+    });
+
+    it("copies a source deleted meanwhile, which stays deleted, and revives the property", async () => {
+      const snapshot = await build(
+        m({ name: "deleteLevel", args: { id: RDC } }, 2_000),
+        m({ name: "deleteProperty", args: { id: PROPERTY } }, 2_000),
+        duplicate(),
+      );
+      expect(snapshot.levels.get(COPY)?.deletedAt).toBeNull();
+      expect(snapshot.properties.get(PROPERTY)?.deletedAt).toBeNull();
+      expect(snapshot.levels.get(RDC)?.deletedAt).toBe(2_000);
+    });
+
+    it("rejects an unknown source without writing anything", async () => {
+      const onRejected = vi.fn();
+      const before = await build();
+      const after = await applyMutations(
+        before,
+        [m({ name: "duplicateLevel", args: { ...args, sourceId: OTHER_LEVEL } })],
+        onRejected,
+      );
+      expect(after).toBe(before);
+      expect(onRejected).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.any(MutationRejectedError),
+        before,
+      );
+    });
+
+    it("is idempotent: applying it again changes nothing", async () => {
+      const once = await build(duplicate());
+      expect(await applyMutations(once, [duplicate()])).toEqual(once);
+    });
+
+    describe("arguments", () => {
+      const parse = (overrides: Partial<typeof args>) =>
+        mutationArgsSchemas.duplicateLevel.safeParse({ ...args, ...overrides });
+      const room = (n: number) => ({
+        id: `0199f0a0-0000-7000-8000-${String(n).padStart(12, "0")}`,
+        name: "Chambre",
+        position: "a0",
+      });
+
+      it("accepts a copy without rooms, and trims the names like any input", () => {
+        expect(parse({ spaces: [] }).success).toBe(true);
+        const spaces = [{ id: COPIED_KITCHEN, name: "  Cuisine ", position: "a0" }];
+        expect(parse({ name: " R+2 ", spaces }).data).toMatchObject({
+          name: "R+2",
+          spaces: [{ name: "Cuisine" }],
+        });
+      });
+
+      it(`refuses more than ${MAX_DUPLICATED_SPACES} rooms, in French`, () => {
+        const spaces = Array.from({ length: MAX_DUPLICATED_SPACES + 1 }, (_, i) => room(100 + i));
+        expect(parse({ spaces: spaces.slice(1) }).success).toBe(true);
+        expect(parse({ spaces }).error?.issues[0]?.message).toBe(
+          "Un niveau de plus de 100\u00a0pièces ne peut pas être dupliqué",
+        );
+      });
+
+      it("refuses ids used twice, or the source's id for the copy", () => {
+        expect(parse({ spaces: [room(1), room(1)] }).success).toBe(false);
+        expect(parse({ spaces: [{ ...room(1), id: COPY }] }).success).toBe(false);
+        expect(parse({ id: RDC }).success).toBe(false);
+      });
+
+      it("validates each room like a room created on its own", () => {
+        expect(parse({ spaces: [{ ...room(1), name: "Cui\u0000sine" }] }).success).toBe(false);
+        expect(parse({ spaces: [{ ...room(1), position: "not a key!" }] }).success).toBe(false);
+      });
     });
   });
 

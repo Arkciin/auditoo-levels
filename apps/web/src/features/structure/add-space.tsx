@@ -1,13 +1,15 @@
 import { type Level, newId, positionAtEnd, type Space } from "@repo/shared";
 import { Plus } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useSafeMutate } from "@/features/use-safe-mutate";
 import { haptic } from "@/lib/haptics";
+import { keepInSight } from "@/lib/keep-in-sight";
 import { nextSpaceName, suggestSpaceNames } from "@/lib/suggestions";
 import { selectStructure, useSyncClient } from "@/sync";
+import { useHighlight } from "./highlight";
 
 /**
  * Rapid room entry at the end of a level: type and press Enter to chain rooms, or tap a
@@ -28,8 +30,26 @@ export function AddSpace({
 }) {
   const client = useSyncClient();
   const safeMutate = useSafeMutate();
+  const highlight = useHighlight();
   const [draft, setDraft] = useState("");
+  const [typing, setTyping] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const entryRef = useRef<HTMLDivElement>(null);
+
+  // The field and its suggestions stay within reach: each new room pushes them down a row, and
+  // the keyboard covers what lies under the field.
+  const keepEntryInSight = useCallback(() => {
+    requestAnimationFrame(() => {
+      if (entryRef.current) keepInSight(entryRef.current);
+    });
+  }, []);
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!typing || !viewport) return;
+    viewport.addEventListener("resize", keepEntryInSight);
+    return () => viewport.removeEventListener("resize", keepEntryInSight);
+  }, [typing, keepEntryInSight]);
+
   // Adds run one after the other so that each one sees the rooms added just before it.
   const queue = useRef<Promise<void>>(Promise.resolve());
   const suggestions = useMemo(
@@ -47,13 +67,17 @@ export function AddSpace({
       const structure = selectStructure(client.getState().view, propertyId);
       const siblings = structure.find((group) => group.level.id === level.id)?.spaces ?? [];
       const names = structure.flatMap((group) => group.spaces.map((space) => space.name));
+      const id = newId();
       const saved = await safeMutate("createSpace", {
-        id: newId(),
+        id,
         levelId: level.id,
         name: nameFor(names),
         position: positionAtEnd(siblings),
       });
-      if (saved) haptic(6);
+      if (!saved) return;
+      haptic(6);
+      highlight(id);
+      keepEntryInSight();
     });
   }
 
@@ -71,7 +95,7 @@ export function AddSpace({
   }
 
   return (
-    <div className="flex flex-col gap-2 pt-2 pr-2 pb-3 pl-10">
+    <div ref={entryRef} className="flex flex-col gap-2 pt-2 pr-2 pb-3 pl-10">
       <form
         className="flex gap-2"
         onSubmit={(event) => {
@@ -90,6 +114,11 @@ export function AddSpace({
           onKeyDown={(event) => {
             if (event.key === "Escape") onOpenChange(false);
           }}
+          onFocus={() => {
+            setTyping(true);
+            keepEntryInSight();
+          }}
+          onBlur={() => setTyping(false)}
           aria-label={`Nouvelle pièce au niveau ${level.name}`}
           placeholder="Nom de la pièce"
           autoComplete="off"
