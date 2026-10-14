@@ -11,6 +11,7 @@ const FLICK_VELOCITY = 0.6;
 /** Movement needed before we decide between a horizontal swipe and a vertical scroll (px). */
 const AXIS_LOCK_DISTANCE = 8;
 const EXIT_DURATION_MS = 160;
+const RESTORE_DELAY_MS = 1500;
 
 interface Gesture {
   pointerId: number;
@@ -121,7 +122,15 @@ export function SwipeToDelete({
       setDragging(false);
       setRemoving(true);
       setOffset(-width());
-      window.setTimeout(onDelete, EXIT_DURATION_MS);
+      window.setTimeout(() => {
+        onDelete();
+        // A deleted row unmounts. If it is still here a moment later, the deletion failed (the
+        // caller reported why): slide the row back instead of leaving a hole in the list.
+        window.setTimeout(() => {
+          setRemoving(false);
+          reset();
+        }, RESTORE_DELAY_MS);
+      }, EXIT_DURATION_MS);
     } else {
       reset();
     }
