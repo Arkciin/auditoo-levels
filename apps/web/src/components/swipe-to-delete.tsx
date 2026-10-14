@@ -59,10 +59,22 @@ export function SwipeToDelete({
     setOffset(0);
   }
 
+  /**
+   * Swallows the click that ends a gesture, which the browser sends at once, if at all (a finger
+   * that moved sends none): the flag must not outlive it, or it would eat the next tap.
+   */
+  function swallowNextClick() {
+    suppressClick.current = true;
+    requestAnimationFrame(() => {
+      suppressClick.current = false;
+    });
+  }
+
   function onPointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    // Whatever this pointer does, the click of an earlier gesture is not coming any more.
+    suppressClick.current = false;
     if (disabled || removing || !event.isPrimary || event.button !== 0) return;
     if ((event.target as Element).closest("[data-no-swipe]")) return;
-    suppressClick.current = false;
     gesture.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
@@ -114,7 +126,7 @@ export function SwipeToDelete({
       gesture.current = null;
       return;
     }
-    suppressClick.current = true;
+    swallowNextClick();
     const distance = event.clientX - current.startX;
     const flicked = current.velocity < -FLICK_VELOCITY && distance < -40;
     if (-distance > width() * DELETE_THRESHOLD || flicked) {
@@ -160,7 +172,8 @@ export function SwipeToDelete({
         onPointerUp={onPointerUp}
         onPointerCancel={reset}
         onClickCapture={(event) => {
-          if (!suppressClick.current) return;
+          // Never a click from the keyboard or a screen reader (detail 0): only a pointer's.
+          if (!suppressClick.current || event.detail === 0) return;
           suppressClick.current = false;
           event.preventDefault();
           event.stopPropagation();

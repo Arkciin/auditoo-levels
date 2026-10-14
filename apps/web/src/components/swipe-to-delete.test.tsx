@@ -81,23 +81,29 @@ function advance(ms: number): void {
 function renderRow({ disabled = false } = {}) {
   const onDelete = vi.fn();
   const onOpen = vi.fn();
+  const onHandle = vi.fn();
   render(
     <SwipeToDelete onDelete={onDelete} disabled={disabled}>
       <div>
         <button type="button" onClick={onOpen}>
           Cuisine
         </button>
-        <button type="button" aria-label="Déplacer Cuisine" data-no-swipe />
+        <button type="button" aria-label="Déplacer Cuisine" data-no-swipe onClick={onHandle} />
       </div>
     </SwipeToDelete>,
   );
   return {
     onDelete,
     onOpen,
+    onHandle,
     name: screen.getByRole("button", { name: "Cuisine" }),
     handle: screen.getByRole("button", { name: "Déplacer Cuisine" }),
   };
 }
+
+/** A click as a pointer produces it (`detail` counts the taps); the keyboard's has `detail` 0. */
+const tap = (target: Element) => fireEvent.click(target, { detail: 1 });
+const pressEnter = (target: Element) => fireEvent.click(target, { detail: 0 });
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -193,16 +199,47 @@ describe("SwipeToDelete", () => {
     const { name, onOpen } = renderRow();
 
     swipe(name, { toX: 200 });
-    fireEvent.click(name); // the browser's click at the end of the gesture
+    tap(name); // the browser's click at the end of the gesture
     expect(onOpen).not.toHaveBeenCalled();
 
-    fireEvent.click(name); // a click without a pointer: keyboard or screen reader
+    pressEnter(name); // a click without a pointer: keyboard or screen reader
     expect(onOpen).toHaveBeenCalledTimes(1);
 
     pointer("pointerDown", name, { x: 100, y: 20, t: 10_000 });
     pointer("pointerUp", name, { x: 100, y: 20, t: 10_080 });
-    fireEvent.click(name); // a tap
+    tap(name);
     expect(onOpen).toHaveBeenCalledTimes(2);
+  });
+
+  it("never swallows a keyboard or screen reader activation after a half swipe", () => {
+    const { name, onOpen } = renderRow();
+
+    // A finger that moved: the browser sends no click at the end of this swipe.
+    swipe(name, { toX: 200 });
+    pressEnter(name);
+
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it("forgets the click to swallow when the next gesture starts, even on a drag handle", () => {
+    const { name, handle, onHandle } = renderRow();
+
+    swipe(name, { toX: 200 }); // no click follows
+    pointer("pointerDown", handle, { x: 290, y: 20, t: 10_000 });
+    pointer("pointerUp", handle, { x: 290, y: 20, t: 10_080 });
+    tap(handle);
+
+    expect(onHandle).toHaveBeenCalledTimes(1);
+  });
+
+  it("forgets the click to swallow a frame after the swipe", () => {
+    const { name, onOpen } = renderRow();
+
+    swipe(name, { toX: 200 }); // no click follows
+    advance(20);
+    tap(name); // e.g. a screen reader activating the name, with no pointer events
+
+    expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
   it("never starts a swipe on an element marked data-no-swipe, such as a drag handle", () => {
