@@ -90,6 +90,7 @@ Logement → levels → rooms. Code and schema say *property* and *space*; the U
 | `spaces` | `id`, `levelId`, `name`, `position`, `deletedAt` | Ordered by `position` within a level |
 | `server_meta` | Singleton: `version` (global, the pull cursor), `epoch` (database identity) | Server only |
 | `clients` | Per device: `last_mutation_id` | Server only, makes pushes idempotent |
+| `rejected_mutations` | Per device and mutation id: the reason it was rejected | Server only, lets a retried push report its rejections again |
 
 Synced tables also carry `version` (the global version that last wrote the row) and `updated_at`.
 SQL: `apps/server/src/db/migrations.ts`; shapes: `packages/shared/src/schemas.ts`.
@@ -109,7 +110,7 @@ SQL: `apps/server/src/db/migrations.ts`; shapes: `packages/shared/src/schemas.ts
 The model is Replicache's (push, pull, rebase), written as plain, readable TypeScript.
 
 ```text
-POST /api/push  { clientId, epoch?, mutations: [{ id, name, args, timestamp }] }  →  { lastMutationId, epoch }
+POST /api/push  { clientId, epoch?, mutations: [{ id, name, args, timestamp }] }  →  { lastMutationId, epoch, rejected: [{ id, reason }] }
 POST /api/pull  { clientId, cursor }  →  { epoch, cursor, lastMutationId, reset, changes: { properties, levels, spaces } }
 GET  /api/events    server-sent events: "poke" { version } after each push that changed data
 ```
@@ -161,6 +162,13 @@ unknown entity) or by the database (SQLSTATE class 22 or 23). The savepoint disc
 writes while the acknowledgement commits, so one bad mutation never blocks a device's queue. Any
 other error is transient: earlier mutations stay committed, the request fails, the device retries.
 
+The response lists the request's rejected mutations by id, with a reason code: `invalid`,
+`not_applicable` or `refused_by_database`, never user data. Each rejection is written with its
+acknowledgement (`rejected_mutations`), so a push retried after a lost response, or after failing
+half-way, reports it again. The field is optional on the wire: installed apps ignore it, a device
+reads an older server's response as rejecting nothing, and reads reasons as any string, so that a
+code a newer server adds cannot make its pushes fail to parse.
+
 ### Gapless versions: a row lock, not a sequence
 
 The pull cursor means "I have every row up to this version", so versions must become visible in
@@ -180,6 +188,25 @@ The device then rebases: it merges the rows into `base`, drops pending mutations
 `lastMutationId`, replays the rest, and commits rows, cursor, epoch and outbox pruning in **one
 IndexedDB transaction** before publishing. If anything fails, memory and storage still agree.
 
+### No change disappears without a word
+
+A change leaves the view without being applied in two ways: the server rejects it, or a replay
+finds it no longer applies to newer server data (its level was lost with a replaced database,
+say), after a pull, a reload from another tab, or at startup. The device reports either, once per
+mutation, in `SyncState.rejections` (the latest 20, newest first, listed in the sync sheet) and to
+`onRejected` listeners (a toast). `describeRejection` names the change as the user saw it and says
+why, finding the missing entity in the state the change was refused on: « La pièce « Cuisine » n'a
+pas pu être déplacée vers « R+1 » : le niveau n'existe plus. ».
+
+- **Announced as it disappears.** A rejection a push reports is worded at once, while the queue
+  still holds the mutation, but announced when the pull that confirms it takes the change off the
+  screen. A replaced database voids such verdicts: the new one judges the mutations again.
+- **Other tabs** only see the mutation leave the outbox: the tab that reports a rejection tells
+  them over the BroadcastChannel.
+- **At startup**, queued changes that no longer apply are listed but not announced: old news.
+- **Mutations of unknown kinds**, which a newer version of the app may have left in the outbox
+  (then rolled back, or in another tab), are refused like any other instead of failing the replay.
+
 ### Replaced databases: reset and epoch
 
 - **Reset.** A cursor ahead of the server means the database went back in time: the pull returns
@@ -195,9 +222,10 @@ IndexedDB transaction** before publishing. If anything fails, memory and storage
 
 | Trigger | Behaviour |
 | --- | --- |
-| A local mutation, the page becoming visible, an SSE `poke` (and every reconnection of the stream: pokes sent meanwhile are lost) | Sync now |
-| `online` event, "Synchroniser maintenant" button | Sync now, bypassing the backoff |
-| Every 30 s while the page is visible | Sync, unless a retry is already scheduled |
+| A local mutation | Sync now; while a retry is scheduled, wait for it: the mutation is safe in the outbox, and says nothing about the network |
+| An SSE `poke`, every (re)connection of the stream (pokes sent meanwhile are lost), the page becoming visible | Sync now, even while backing off: the server just proved reachable, or the user is back |
+| `online` event, "Synchroniser maintenant" button | Sync now and reset the backoff |
+| Every 30 s while the page is visible | Sync, unless a retry is already scheduled; reopen the event stream if it gave up |
 | A failed cycle | Retry after 1 s, doubling up to 30 s, ±20 % jitter so devices cut off together do not retry in lockstep |
 
 A cycle is push then pull, each request bounded by a 15 s timeout (weak mobile networks hang rather
@@ -206,7 +234,8 @@ than fail). A `NetworkError` means offline, a normal state; HTTP and protocol er
 ### Several tabs and durability
 
 - **Web Locks** allow one push/pull cycle at a time per device; through a **BroadcastChannel**, a
-  tab that wrote tells the others to reload from IndexedDB, the single source of truth.
+  tab that wrote tells the others to reload from IndexedDB, the single source of truth (and passes
+  on the rejections it reports, which the storage cannot show).
 - **Mutation ids** come from the outbox's `autoIncrement` key generator: increasing across tabs,
   never reused. Push reads the outbox from storage, so no tab sends a mutation before an older one.
 - **Strict durability** on outbox writes (Chrome defaults to relaxed, which can lose the last writes
@@ -226,7 +255,7 @@ than fail). A `NetworkError` means offline, a normal state; HTTP and protocol er
 | Delete a level | Its rooms are hidden with it; undo restores them all | One row write, nothing to remember about which rooms went together |
 | Delete an already deleted item | No-op, no version bump | Idempotent |
 | Move a room to another logement | Rejected | A room belongs to one dwelling; drag and drop never offers it |
-| Mutation on an entity the server does not know | Rejected, acknowledged, dropped at the next pull | Only after a database wipe, or from a buggy client |
+| Mutation on an entity the server does not know | Rejected, acknowledged, reported to the user (toast, sync sheet), dropped at the next pull | Only after a database wipe, or from a buggy client |
 
 ## Ordering with fractional indexes
 
@@ -279,6 +308,7 @@ that the list stays strictly ordered with valid keys; 500 appends keep keys at 8
 | **Levels go where they belong** | French level names are ranked (Sous-sol below RDC, R+n or "2e étage" above, Combles on top), so a Sous-sol added after the RDC is inserted below it; unknown names go last. The sheet offers the likely next levels in one tap. |
 | **Undo instead of "Are you sure?"** | Deletes are soft, so each one shows a 6 s toast with "Annuler", which queues a `restore*` mutation (offline too). A confirmation dialog would tax every delete to protect the rare mistake. |
 | **Sync status always in view** | A header pill (À jour, En attente with a count, Envoi…, Hors ligne, Erreur) opens a sheet listing pending changes in plain French, with a "Synchroniser maintenant" button; a banner says what happens to work done offline. |
+| **No silent rejection** | A change the server refuses, or that no longer applies, gets an error toast saying which and why, and stays listed in the sync sheet ("modifications non appliquées"), whose relative times keep ticking while it is open. |
 | **Legibility on site** | Atkinson Hyperlegible Next, designed by the Braille Institute for low-vision readers, for dim basements and glare; 16 px body text; one brand colour (forest `#033527`) and one accent; field outlines at 3:1 contrast. |
 | **Touch hygiene and comfort** | 44 px minimum targets; 16 px inputs (iOS zooms into smaller ones); safe-area padding; no pull-to-refresh to fight a drag; light haptics where the Vibration API exists. Dark mode follows the OS; with `prefers-reduced-motion`, animations are shortened rather than removed, so components waiting for `animationend` still close. |
 
@@ -310,23 +340,25 @@ that the list stays strictly ordered with valid keys; 500 appends keep keys at 8
 
 ## Testing strategy
 
-`pnpm test` runs 185 Vitest tests in about 40 s, with no database to install.
+`pnpm test` runs 234 Vitest tests in about 45 s, with no database to install.
 
 | Suite | Tests | Covers |
 | --- | --- | --- |
-| `packages/shared` | 44 | Mutators (edit wins, rejections without partial writes, determinism), positions (fast-check property test), name validation, protocol envelopes |
-| `apps/server`, on in-memory PGlite | 29 | Idempotent retries, rejected and invalid mutations acknowledged, database refusals as permanent, sparse ids, no-op mutations, epochs, reset, gapless versions under concurrent pushes; HTTP validation, cache headers, SSE pokes, SPA fallback; migrations |
-| `apps/web`, on fake-indexeddb | 112 | `SyncClient` against `MemoryServer`, an in-memory reference implementation of the protocol; storage (id allocation, atomic pulls, reopened connections), transport errors, React bindings, selectors, French descriptions, naming suggestions; the convergence simulation (12 tests, below) |
-| Playwright, mobile Chromium | 8 | Create, rename, swipe and undo; levels and rooms entry; drag within and across levels; offline reload then resync; a rename reaching a second device through SSE |
+| `packages/shared` | 52 | Mutators (edit wins, rejections without partial writes, determinism), positions (fast-check property test), name validation, protocol envelopes (one per mutation), push responses old and new, unknown mutation kinds refused |
+| `apps/server`, on in-memory PGlite | 33 | Idempotent retries, rejected and invalid mutations acknowledged and reported with their reason (again to retries, racing or not, and after a push failed half-way), database refusals as permanent, sparse ids, no-op mutations, epochs, reset, gapless versions under concurrent pushes; HTTP validation, cache headers, SSE pokes, SPA fallback; migrations |
+| `apps/web`, on fake-indexeddb | 149 | `SyncClient` against `MemoryServer`, an in-memory reference implementation of the protocol: rejections reported once (lost responses, replays, startup, other tabs), backoff per trigger; storage (id allocation, atomic pulls, reopened connections), transport errors, React bindings, selectors, French descriptions, naming suggestions, relative times; the convergence simulation (12 tests, below) |
+| Playwright, mobile Chromium | 10 | Create, rename, swipe and undo; levels and rooms entry; drag within and across levels; offline reload then resync; a rename reaching a second device through SSE; a change the server rejects, announced and listed in the sync sheet; the sheet's times kept current |
 
 **The convergence simulation** (`apps/web/src/sync/convergence.test.ts`) is the sync engine's
 safety net. Three devices share a `MemoryServer` for 300 random steps, over 8 seeds. At each step a
 device acts on what it shows (often stale), switches its network between online, offline and lossy,
 syncs, keeps working while a sync is in flight, or restarts and loses its memory. After every step,
 memory must equal storage and the view must equal base plus pending. At the end every device must
-hold exactly the server's state with an empty outbox, no mutation may be lost or rejected,
-invariants must hold (parents exist, positions valid, no room left its logement), and all 14
-mutation kinds must have run. Four more seeds also wipe the server's database twice.
+hold exactly the server's state with an empty outbox, no mutation may be lost or rejected, and no
+device may have reported a change as not applying; invariants must hold (parents exist, positions
+valid, no room left its logement), and all 14 mutation kinds must have run. Four more seeds also
+wipe the server's database twice: there, every mutation the final database rejected must have
+been reported to its device, lost responses and restarts included.
 
 The server was also checked by hand against PostgreSQL 16: concurrent migrations, 12 devices × 25
 mutations racing two server instances, gapless versions; and the whole end-to-end suite passes
@@ -357,12 +389,17 @@ and end-to-end tests on every push.
 
 - **No authentication or tenant scoping**: every device pulls everything. Next: accounts, pulls
   scoped to an organisation, permission checks in the server's mutator transaction.
-- **Tombstones are never collected**: deleted rows and old `clients` rows stay forever. Next: purge
-  rows deleted long ago and send `reset` to devices whose cursor predates the purge.
+- **Tombstones are never collected**: deleted rows, old `clients` rows and `rejected_mutations`
+  stay forever. Next: purge rows deleted long ago and send `reset` to devices whose cursor predates
+  the purge. Rejections need more care: a device announces one only once a pull confirms it, so a
+  record may only go once its device is known to have pulled past it.
 - **SSE pokes are in-process**: several instances would need Postgres `LISTEN/NOTIFY`.
 - **Concurrent renames are whole-field last-write-wins**, with no merge and no conflict UI.
-- **Server rejections are silent**: the push response has no per-mutation outcome, so a rejected
-  change just disappears at the next pull. Next: return rejected ids with reasons and show them.
+- **Rejection notices live in memory**: a restart empties the sync sheet's list (each one was
+  announced), and a rejection whose confirming pull had not come yet is announced again after it.
+- **A change reported as no longer applying may still reach the server**: after a database
+  replacement, if another device pushes again the entity it needed. It then reappears; rare, and
+  nothing is lost. No conflict UI beyond the message: re-doing the change is up to the user.
 - **Room actions are discreet on touch**: swipe to delete, or tap the name and then the trash
   button. A per-room menu would be more discoverable, especially with a screen reader.
 - **Long levels are dragged whole**: an earlier version collapsed every level during a level drag,

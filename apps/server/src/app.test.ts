@@ -57,8 +57,10 @@ describe("API", () => {
     const push = await post(app, "/api/push", { clientId: DEVICE, mutations: [createProperty] });
     expect(push.status).toBe(200);
     expect(push.headers.get("cache-control")).toBe("no-store");
-    const pushed = pushResponseSchema.parse(await push.json());
-    expect(pushed).toEqual({ lastMutationId: 1, epoch: expect.any(String) });
+    const body: unknown = await push.json();
+    // As sent, before the schema fills in defaults: `rejected` is always there, even empty.
+    expect(body).toEqual({ lastMutationId: 1, epoch: expect.any(String), rejected: [] });
+    const pushed = pushResponseSchema.parse(body);
 
     const pull = await post(app, "/api/pull", { clientId: DEVICE, cursor: 0 });
     expect(pull.status).toBe(200);
@@ -110,7 +112,10 @@ describe("API", () => {
       mutations: [createProperty, invalid, rename],
     });
     expect(push.status).toBe(200);
-    expect(pushResponseSchema.parse(await push.json())).toMatchObject({ lastMutationId: 3 });
+    expect(pushResponseSchema.parse(await push.json())).toMatchObject({
+      lastMutationId: 3,
+      rejected: [{ id: 2, reason: "invalid" }],
+    });
 
     // Only a malformed envelope fails the request: without a usable id, nothing can be tracked.
     const malformed = await post(app, "/api/push", {

@@ -68,9 +68,12 @@ export function createApp({ db, staticDir, signal }: AppOptions): Hono {
   app.post("/api/push", async (c) => {
     const request = pushRequestSchema.safeParse(await readJson(c));
     if (!request.success) return invalidRequest(c, request.error);
-    const { lastMutationId, epoch, changed, version } = await processPush(db, request.data);
+    const { lastMutationId, epoch, rejected, changed, version } = await processPush(
+      db,
+      request.data,
+    );
     if (changed) pokes.publish(version);
-    return c.json({ lastMutationId, epoch } satisfies PushResponse);
+    return c.json({ lastMutationId, epoch, rejected } satisfies PushResponse);
   });
 
   app.post("/api/pull", async (c) => {

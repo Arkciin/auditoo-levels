@@ -18,18 +18,22 @@ import { z } from "zod";
 import {
   type MutationContext,
   type MutationName,
+  MutationRejectedError,
   type MutatorTx,
   mutationArgsSchemas,
+  mutationNames,
   mutators,
 } from "./mutators";
 import { idSchema, levelSchema, propertySchema, spaceSchema, timestampSchema } from "./schemas";
 
 export const MAX_MUTATIONS_PER_PUSH = 100;
 
+/** Per-device sequence number of a mutation, strictly increasing (gaps allowed). */
+const mutationIdSchema = z.number().int().positive();
+
 function envelope<N extends MutationName>(name: N) {
   return z.object({
-    /** Per-device sequence number, strictly increasing. */
-    id: z.number().int().positive(),
+    id: mutationIdSchema,
     name: z.literal(name),
     args: mutationArgsSchemas[name],
     /** When the user performed the action, on their device. */
@@ -37,26 +41,27 @@ function envelope<N extends MutationName>(name: N) {
   });
 }
 
-export const mutationSchema = z.discriminatedUnion("name", [
-  envelope("createProperty"),
-  envelope("renameProperty"),
-  envelope("deleteProperty"),
-  envelope("restoreProperty"),
-  envelope("createLevel"),
-  envelope("renameLevel"),
-  envelope("moveLevel"),
-  envelope("deleteLevel"),
-  envelope("restoreLevel"),
-  envelope("createSpace"),
-  envelope("renameSpace"),
-  envelope("moveSpace"),
-  envelope("deleteSpace"),
-  envelope("restoreSpace"),
-]);
+type AnyEnvelope = { [N in MutationName]: ReturnType<typeof envelope<N>> }[MutationName];
+
+// One envelope per mutation of `mutationArgsSchemas`, so that a new mutation can never be missing
+// here (the server would reject it as invalid). Typing boundary: `map` cannot express that it
+// returns one envelope per name, and at least one; `Mutation` stays a union discriminated by name.
+const envelopes = mutationNames.map((name) => envelope(name)) as [AnyEnvelope, ...AnyEnvelope[]];
+
+export const mutationSchema = z.discriminatedUnion("name", envelopes);
 export type Mutation = z.infer<typeof mutationSchema>;
 
-/** Runs a mutation's mutator. Callers own the transaction (and its rollback on error). */
+/**
+ * Runs a mutation's mutator. Callers own the transaction (and its rollback on error).
+ *
+ * A mutation of a kind this version does not know is refused like any mutation that cannot apply
+ * (`MutationRejectedError`). The types rule it out, but a device's outbox may hold what another
+ * version of the app wrote: a newer one, then rolled back, or a newer tab next to an older one.
+ */
 export function applyMutation(tx: MutatorTx, mutation: Mutation): Promise<void> {
+  if (!Object.hasOwn(mutators, mutation.name)) {
+    return Promise.reject(new MutationRejectedError(`Unknown mutation ${mutation.name}`));
+  }
   // Sound cast: the discriminated union guarantees `args` matches `name`.
   const run = mutators[mutation.name] as (
     tx: MutatorTx,
@@ -74,7 +79,7 @@ export function applyMutation(tx: MutatorTx, mutation: Mutation): Promise<void> 
  * fail the whole push, or the device would retry it forever and never sync again.
  */
 export const mutationEnvelopeSchema = z.object({
-  id: z.number().int().positive(),
+  id: mutationIdSchema,
   name: z.string(),
   args: z.unknown(),
   timestamp: timestampSchema,
@@ -101,11 +106,37 @@ export interface PushRequest extends ReceivedPushRequest {
   mutations: Mutation[];
 }
 
+/**
+ * Why the server rejected a mutation (it still counts as processed: one bad mutation must not block
+ * a device's queue). A code, never user data: devices put it into words themselves.
+ * - `invalid`: its content breaks the rules of `mutationSchema` (e.g. it was written by another
+ *   version of the app, under rules that have changed since);
+ * - `not_applicable`: its mutator refused it (`MutationRejectedError`), e.g. its entity is unknown;
+ * - `refused_by_database`: the database refused it (SQLSTATE class 22 or 23).
+ */
+export type RejectionReason = "invalid" | "not_applicable" | "refused_by_database";
+
 export const pushResponseSchema = z.object({
   /** Highest mutation id the server has processed for this device. */
   lastMutationId: z.number().int().nonnegative(),
   /** The server's epoch. When it differs from the request's, nothing was processed. */
   epoch: idSchema,
+  /**
+   * The mutations of this push the server rejected: now, or when an earlier attempt processed them
+   * (that attempt's response may have been lost). Servers older than this field leave it out.
+   */
+  rejected: z
+    .array(
+      z.object({
+        id: mutationIdSchema,
+        /**
+         * A {@link RejectionReason}, read as any string: a device must keep syncing when a newer
+         * server adds a code it does not know yet (a failed parse would block its queue).
+         */
+        reason: z.string(),
+      }),
+    )
+    .default(() => []),
 });
 export type PushResponse = z.infer<typeof pushResponseSchema>;
 

@@ -3,7 +3,13 @@
  * See `sync-client.ts` for the model and its guarantees.
  */
 export { createBrowserSyncClient } from "./browser";
-export { describeMutation, describeMutationError, describePendingMutations } from "./describe";
+export {
+  describeMutation,
+  describeMutationError,
+  describePendingMutations,
+  describeRejection,
+  quote,
+} from "./describe";
 export {
   SyncProvider,
   type SyncProviderProps,
@@ -31,6 +37,8 @@ export {
 } from "./storage";
 export {
   DEFAULT_CHANNEL_NAME,
+  MAX_RECENT_REJECTIONS,
+  type Rejection,
   SyncClient,
   type SyncClientOptions,
   type SyncState,

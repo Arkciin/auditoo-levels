@@ -9,6 +9,7 @@ import type * as React from "react";
 
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
+import { RejectionToasts } from "@/features/sync-status/rejection-toasts";
 
 export const Route = createRootRoute({
   component: RootLayout,
@@ -28,6 +29,7 @@ function RootLayout() {
         <Outlet />
       </div>
       <Toaster />
+      <RejectionToasts />
     </>
   );
 }

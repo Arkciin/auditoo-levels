@@ -114,7 +114,11 @@ describe("mutators", () => {
         onRejected,
       );
       expect(after).toBe(before);
-      expect(onRejected).toHaveBeenCalledWith(expect.anything(), expect.any(MutationRejectedError));
+      expect(onRejected).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.any(MutationRejectedError),
+        before,
+      );
     });
 
     it("refuses to move a space to another property", async () => {

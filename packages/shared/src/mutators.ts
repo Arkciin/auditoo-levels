@@ -43,7 +43,7 @@ export interface MutationContext {
 /**
  * Thrown when a mutation cannot apply to the current state (e.g. it targets an entity that does
  * not exist). The server records the mutation as processed and moves on, so one bad mutation can
- * never block a device's queue; the client simply drops it on the next pull.
+ * never block a device's queue; the device tells its user, and drops it at the next pull.
  */
 export class MutationRejectedError extends Error {
   override readonly name = "MutationRejectedError";

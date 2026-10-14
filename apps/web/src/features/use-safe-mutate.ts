@@ -32,7 +32,5 @@ export function toastUndo(message: string, undo: () => void) {
   });
 }
 
-/** French quotes with non-breaking spaces: « Cuisine ». */
-export function quote(name: string): string {
-  return `« ${name} »`;
-}
+// Next to the other helpers of the screens' toasts; defined with the sync layer's French texts.
+export { quote } from "@/sync";

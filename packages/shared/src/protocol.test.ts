@@ -1,12 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import { z } from "zod";
+import { type MutationArgs, mutationNames } from "./mutators";
 import {
   MAX_MUTATIONS_PER_PUSH,
+  type Mutation,
   type MutationEnvelope,
   mutationSchema,
   type PushRequest,
+  type PushResponse,
   pushRequestSchema,
+  pushResponseSchema,
   type ReceivedPushRequest,
 } from "./protocol";
+import { idSchema } from "./schemas";
 
 const CLIENT = "0199f0a0-0000-7000-8000-0000000000a1";
 const PROPERTY = "0199f0a0-0000-7000-8000-000000000001";
@@ -66,5 +72,65 @@ describe("pushRequestSchema", () => {
     const sent: PushRequest = { clientId: CLIENT, mutations: [mutationSchema.parse(valid)] };
     const received: ReceivedPushRequest = sent; // Type-level: a device's push is always accepted.
     expect(pushRequestSchema.parse(received)).toEqual(sent);
+  });
+});
+
+describe("mutationSchema", () => {
+  it("has one envelope per mutation, discriminated by name", () => {
+    expect(mutationSchema.options.map((option) => option.shape.name.value)).toEqual(mutationNames);
+    // Type-level: each name still narrows the arguments.
+    expectTypeOf<Extract<Mutation, { name: "moveSpace" }>["args"]>().toEqualTypeOf<
+      MutationArgs<"moveSpace">
+    >();
+    expectTypeOf<Mutation["name"]>().toEqualTypeOf<(typeof mutationNames)[number]>();
+  });
+});
+
+describe("pushResponseSchema", () => {
+  const EPOCH = "0199f0a0-0000-7000-8000-0000000000e1";
+
+  it("reports rejected mutations by id and reason, without user data", () => {
+    const response: PushResponse = {
+      lastMutationId: 3,
+      epoch: EPOCH,
+      rejected: [{ id: 2, reason: "not_applicable" }],
+    };
+    expect(pushResponseSchema.parse(response)).toEqual(response);
+  });
+
+  it("stays readable by installed apps, whose schema predates rejection reports", () => {
+    // The push response schema of the versions already installed on devices.
+    const installed = z.object({ lastMutationId: z.number().int().nonnegative(), epoch: idSchema });
+    const response: PushResponse = {
+      lastMutationId: 3,
+      epoch: EPOCH,
+      rejected: [{ id: 2, reason: "invalid" }],
+    };
+    expect(installed.parse(JSON.parse(JSON.stringify(response)))).toEqual({
+      lastMutationId: 3,
+      epoch: EPOCH,
+    });
+  });
+
+  it("reads a response from a server older than rejection reports as rejecting nothing", () => {
+    expect(pushResponseSchema.parse({ lastMutationId: 3, epoch: EPOCH })).toEqual({
+      lastMutationId: 3,
+      epoch: EPOCH,
+      rejected: [],
+    });
+  });
+
+  it("accepts reasons this version does not know, so that a newer server cannot block a device", () => {
+    const parsed = pushResponseSchema.parse({
+      lastMutationId: 3,
+      epoch: EPOCH,
+      rejected: [{ id: 3, reason: "forbidden", detail: "ignored" }],
+    });
+    expect(parsed.rejected).toEqual([{ id: 3, reason: "forbidden" }]);
+  });
+
+  it("still refuses a rejection without a usable mutation id", () => {
+    const response = { lastMutationId: 3, epoch: EPOCH, rejected: [{ id: 0, reason: "invalid" }] };
+    expect(pushResponseSchema.safeParse(response).success).toBe(false);
   });
 });

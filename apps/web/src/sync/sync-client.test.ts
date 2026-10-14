@@ -2,9 +2,14 @@ import { MAX_MUTATIONS_PER_PUSH, MutationRejectedError } from "@repo/shared";
 import { IDBFactory } from "fake-indexeddb";
 import { wrap } from "idb";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { describeMutationError } from "./describe";
-import { DEFAULT_DATABASE_NAME, openSyncStorage, StorageClosedError } from "./storage";
-import { retryDelay, type SyncClient } from "./sync-client";
+import { describeMutationError, describePendingMutations } from "./describe";
+import {
+  DEFAULT_DATABASE_NAME,
+  type MutationDraft,
+  openSyncStorage,
+  StorageClosedError,
+} from "./storage";
+import { MAX_RECENT_REJECTIONS, type Rejection, retryDelay, type SyncClient } from "./sync-client";
 import {
   closeLikeTheBrowser,
   type DeviceOptions,
@@ -45,6 +50,43 @@ async function createClient(options: TestClientOptions): Promise<SyncClient> {
   const client = await openTestClient(options);
   cleanups.push(() => client.dispose());
   return client;
+}
+
+/** EventSource stand-in, whose events tests dispatch themselves. */
+class FakeEventSource extends EventTarget {
+  static readonly CLOSED = 2;
+  static readonly instances: FakeEventSource[] = [];
+  readyState = 1;
+
+  /** The stream opened last. */
+  static last(): FakeEventSource {
+    const events = FakeEventSource.instances.at(-1);
+    if (!events) throw new Error("No EventSource was opened");
+    return events;
+  }
+
+  constructor(readonly url: string) {
+    super();
+    FakeEventSource.instances.push(this);
+  }
+
+  close() {
+    this.readyState = FakeEventSource.CLOSED;
+  }
+}
+
+/** `document` stand-in, whose visibility tests set themselves. */
+type FakePage = EventTarget & { visibilityState: DocumentVisibilityState };
+
+function fakePage(): FakePage {
+  return Object.assign(new EventTarget(), {
+    visibilityState: "visible" as DocumentVisibilityState,
+  });
+}
+
+/** Writes expectations with plain spaces; French typography wants U+00A0 inside « » and before :. */
+function french(text: string): string {
+  return text.replaceAll("« ", "«\u00a0").replaceAll(" »", "\u00a0»").replaceAll(" :", "\u00a0:");
 }
 
 describe("SyncClient", () => {
@@ -135,7 +177,11 @@ describe("SyncClient", () => {
     client.start();
     await waitForState(client, (s) => s.status.connection === "offline"); // Retry in 1 s.
 
-    await client.mutate("createProperty", { id: P1, name: "Maison" }); // Fails again: retry in 2 s.
+    // A change made meanwhile says nothing about the network: it waits for the retry.
+    await client.mutate("createProperty", { id: P1, name: "Maison" });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(transport.attempts).toBe(1);
+    await vi.advanceTimersByTimeAsync(1); // Fails again: retry in 2 s.
     await waitForState(client, (s) => transport.attempts === 2 && s.status.phase === "idle");
     expect(client.getState().status).toMatchObject({ connection: "offline", lastError: null });
 
@@ -145,6 +191,37 @@ describe("SyncClient", () => {
     await vi.advanceTimersByTimeAsync(1);
     await waitForState(client, (s) => s.status.pendingCount === 0);
     expect(client.getState().status.connection).toBe("online");
+    expect(server.snapshot().properties.has(P1)).toBe(true);
+  });
+
+  it.each<[string, (fakes: { events: FakeEventSource; page: FakePage }) => void]>([
+    ["the event stream reconnects", ({ events }) => events.dispatchEvent(new Event("open"))],
+    ["the server pokes", ({ events }) => events.dispatchEvent(new Event("poke"))],
+    [
+      "the page shows again",
+      ({ page }) => {
+        page.visibilityState = "visible";
+        page.dispatchEvent(new Event("visibilitychange"));
+      },
+    ],
+  ])("syncs at once when %s, even while backing off", async (_, signal) => {
+    // With fake timers the backoff never elapses: only the signal can complete the sync.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const page = fakePage();
+    vi.stubGlobal("document", page);
+    const server = new MemoryServer();
+    const { client, transport } = await createDevice(server, { eventsUrl: "/api/events" });
+    transport.mode = "offline";
+    client.start();
+    await waitForState(client, (s) => s.status.connection === "offline"); // Backing off.
+    await client.mutate("createProperty", { id: P1, name: "Maison" }); // Waits for the retry.
+    expect(transport.attempts).toBe(1);
+
+    transport.mode = "online";
+    signal({ events: FakeEventSource.last(), page });
+
+    await waitForState(client, (s) => s.status.pendingCount === 0);
     expect(server.snapshot().properties.has(P1)).toBe(true);
   });
 
@@ -393,43 +470,27 @@ describe("SyncClient", () => {
   });
 
   it("syncs when the server pokes, and closes the event stream when stopped", async () => {
-    class FakeEventSource extends EventTarget {
-      static readonly CLOSED = 2;
-      static readonly instances: FakeEventSource[] = [];
-      readyState = 1;
-
-      constructor(readonly url: string) {
-        super();
-        FakeEventSource.instances.push(this);
-      }
-
-      close() {
-        this.readyState = FakeEventSource.CLOSED;
-      }
-    }
     vi.stubGlobal("EventSource", FakeEventSource);
     const server = new MemoryServer();
     const author = await createDevice(server);
     const reader = await createDevice(server, { eventsUrl: "/api/events" });
     reader.client.start();
     await waitForState(reader.client, (s) => s.status.lastSyncedAt !== null);
-    const [events] = FakeEventSource.instances;
-    expect(events?.url).toBe("/api/events");
+    const events = FakeEventSource.last();
+    expect(events.url).toBe("/api/events");
 
     await author.client.mutate("createProperty", { id: P1, name: "Maison" });
     await author.client.syncNow();
-    events?.dispatchEvent(new Event("poke"));
+    events.dispatchEvent(new Event("poke"));
 
     await waitForState(reader.client, (s) => s.view.properties.has(P1));
     reader.client.stop();
-    expect(events?.readyState).toBe(FakeEventSource.CLOSED);
+    expect(events.readyState).toBe(FakeEventSource.CLOSED);
   });
 
   it("syncs periodically while the page is visible, and when it shows again", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
-    const page = Object.assign(new EventTarget(), {
-      visibilityState: "visible" as DocumentVisibilityState,
-    });
+    const page = fakePage();
     vi.stubGlobal("document", page);
     const server = new MemoryServer();
     const author = await createDevice(server);
@@ -505,6 +566,206 @@ describe("SyncClient", () => {
       expect(server.rejected).toEqual([]);
       expect(rowsOf(tabB.getState().view)).toEqual(rowsOf(server.snapshot()));
     });
+  });
+});
+
+describe("changes that do not apply", () => {
+  it("reports a change the server rejects, once, as it leaves the view", async () => {
+    const server = new MemoryServer();
+    server.rejectWhen = (mutation) =>
+      mutation.name === "createProperty" &&
+      mutation.args.name === "Refusé" &&
+      "refused_by_database";
+    const { client } = await createDevice(server, { now: () => 42_000 });
+    const heard: Array<{ rejection: Rejection; stillShown: boolean; listed: boolean }> = [];
+    client.onRejected((rejection) => {
+      const state = client.getState();
+      const listed = state.rejections[0] === rejection;
+      heard.push({ rejection, stillShown: state.view.properties.has(P2), listed });
+    });
+    await client.mutate("createProperty", { id: P1, name: "Accepté" });
+    await client.mutate("createProperty", { id: P2, name: "Refusé" });
+
+    await client.syncNow();
+    await client.syncNow(); // Nothing new: not reported again.
+
+    const rejection: Rejection = {
+      mutationId: 2,
+      reason: "refused_by_database",
+      message: french(
+        "Le logement « Refusé » n'a pas pu être créé : le serveur a refusé de l'enregistrer.",
+      ),
+      at: 42_000,
+    };
+    expect(heard).toEqual([{ rejection, stillShown: false, listed: true }]);
+    expect(client.getState().rejections).toEqual([rejection]);
+    expect(client.getState().view.properties.has(P1)).toBe(true);
+  });
+
+  it("still reports a rejection whose push lost its response", async () => {
+    const server = new MemoryServer();
+    server.rejectWhen = (mutation) => mutation.name === "renameProperty";
+    const { client, transport } = await createDevice(server);
+    await client.mutate("createProperty", { id: P1, name: "Maison" });
+    await client.syncNow();
+    const listener = vi.fn();
+    client.onRejected(listener);
+
+    await client.mutate("renameProperty", { id: P1, name: "Villa" });
+    transport.mode = "lossy"; // The server processes the push; its answer never comes back.
+    await client.syncNow();
+    expect(server.rejected).toHaveLength(1);
+    expect(listener).not.toHaveBeenCalled();
+
+    transport.mode = "online";
+    await client.syncNow(); // The retry finds the rename already processed, and rejected.
+
+    expect(listener).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ mutationId: 2, reason: "not_applicable" }),
+    );
+    expect(client.getState().view.properties.get(P1)?.name).toBe("Maison");
+  });
+
+  it("explains a room refused because the server refused its level", async () => {
+    const server = new MemoryServer();
+    server.rejectWhen = (mutation) => mutation.name === "createLevel" && "invalid";
+    const { client } = await createDevice(server);
+    await client.mutate("createProperty", { id: P1, name: "Maison" });
+    await client.mutate("createLevel", { id: L1, propertyId: P1, name: "R+1", position: "a0" });
+    await client.mutate("createSpace", { id: S1, levelId: L1, name: "Chambre 1", position: "a0" });
+
+    await client.syncNow();
+
+    expect(client.getState().rejections.map((rejection) => rejection.message)).toEqual([
+      french("La pièce « Chambre 1 » n'a pas pu être ajoutée : le niveau n'existe plus."),
+      french(
+        "Le niveau « R+1 » n'a pas pu être ajouté : le serveur a jugé la modification invalide.",
+      ),
+    ]);
+  });
+
+  it("reports a queued change that no longer applies to newer server data, once", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {}); // Starting over is logged.
+    const server = new MemoryServer();
+    const { client, transport } = await createDevice(server);
+    await client.mutate("createProperty", { id: P1, name: "Maison" });
+    await client.mutate("createLevel", { id: L1, propertyId: P1, name: "RDC", position: "a0" });
+    await client.syncNow();
+    const listener = vi.fn();
+    client.onRejected(listener);
+
+    // Offline, a room goes into the level, while the server's database is replaced.
+    transport.mode = "offline";
+    await client.mutate("createSpace", { id: S1, levelId: L1, name: "Cuisine", position: "a0" });
+    server.wipe();
+    transport.mode = "online";
+    await client.syncNow(); // Starts over from the new database: no level, so no room.
+
+    expect(client.getState().view.spaces.has(S1)).toBe(false);
+    // Once, although the new database then rejected it too.
+    expect(server.rejectionsOf(client.clientId)).toEqual(new Map([[3, "not_applicable"]]));
+    expect(listener).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        mutationId: 3,
+        reason: "not_applicable",
+        message: french("La pièce « Cuisine » n'a pas pu être ajoutée : le niveau n'existe plus."),
+      }),
+    );
+  });
+
+  it("lists queued changes that no longer apply when the app starts, without announcing them", async () => {
+    const server = new MemoryServer();
+    const indexedDB = new IDBFactory();
+    const storage = await openSyncStorage({ indexedDB });
+    const args = { id: S1, levelId: L1, name: "Cuisine", position: "a0" };
+    await storage.enqueue({ name: "createSpace", args, timestamp: 1 });
+    storage.close();
+
+    const client = await createClient({ indexedDB, transport: new MemoryTransport(server) });
+    const listener = vi.fn();
+    client.onRejected(listener);
+    await client.syncNow(); // The server rejects it as well: old news.
+
+    expect(client.getState().rejections).toEqual([
+      expect.objectContaining({
+        mutationId: 1,
+        message: french("La pièce « Cuisine » n'a pas pu être ajoutée : le niveau n'existe plus."),
+      }),
+    ]);
+    expect(server.rejected).toHaveLength(1);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("starts with a queued mutation of a kind it does not know (from a newer version)", async () => {
+    // A newer version queued it offline, then the app was rolled back; or an older tab is still
+    // open while a newer one works. Its replay must not stop this version from starting.
+    const server = new MemoryServer();
+    const indexedDB = new IDBFactory();
+    const newer = await openSyncStorage({ indexedDB });
+    await newer.enqueue({ name: "createProperty", args: { id: P1, name: "Maison" }, timestamp: 1 });
+    const unknown = { name: "paintWalls", args: { id: P1, colour: "vert" }, timestamp: 2 };
+    // Typing boundary: what another version of the app wrote to the outbox.
+    await newer.enqueue(unknown as unknown as MutationDraft);
+    newer.close();
+
+    const client = await createClient({ indexedDB, transport: new MemoryTransport(server) });
+
+    expect(client.getState().view.properties.get(P1)?.name).toBe("Maison");
+    expect(client.getState().rejections).toEqual([
+      expect.objectContaining({
+        mutationId: 2,
+        message:
+          "Une modification faite avec une autre version de Relevé n'a pas pu être appliquée.",
+      }),
+    ]);
+    expect(describePendingMutations(client.getState().base, client.getState().pending)).toEqual([
+      french("Logement « Maison » créé"),
+      "Modification faite avec une autre version de Relevé",
+    ]);
+    await client.syncNow(); // The server, which does not know it either, rejects it as invalid.
+    expect(server.rejected.map((mutation) => mutation.id)).toEqual([2]);
+    expect(client.getState().pending).toEqual([]);
+    expect(rowsOf(client.getState().view)).toEqual(rowsOf(server.snapshot()));
+  });
+
+  it(`keeps the latest ${MAX_RECENT_REJECTIONS} rejections, newest first`, async () => {
+    const server = new MemoryServer();
+    server.rejectWhen = (mutation) => mutation.name === "renameProperty";
+    const { client } = await createDevice(server);
+    await client.mutate("createProperty", { id: P1, name: "Maison" });
+    for (let n = 1; n <= MAX_RECENT_REJECTIONS + 5; n++) {
+      await client.mutate("renameProperty", { id: P1, name: `Nom ${n}` });
+    }
+
+    await client.syncNow();
+
+    const { rejections } = client.getState();
+    expect(rejections).toHaveLength(MAX_RECENT_REJECTIONS);
+    expect(rejections[0]?.message).toContain(french(`en « Nom ${MAX_RECENT_REJECTIONS + 5} »`));
+    expect(rejections.at(-1)?.message).toContain(french("en « Nom 6 »"));
+  });
+
+  it("tells the other tabs, which cannot see a rejection in the storage", async () => {
+    const server = new MemoryServer();
+    server.rejectWhen = (mutation) => mutation.name === "renameProperty";
+    const indexedDB = new IDBFactory();
+    const transport = new MemoryTransport(server);
+    const channelName = `releve-sync-test-${crypto.randomUUID()}`;
+    const tabA = await createClient({ indexedDB, transport, channelName });
+    const tabB = await createClient({ indexedDB, transport, channelName });
+    const heardInB = vi.fn();
+    tabB.onRejected(heardInB);
+    await tabA.mutate("createProperty", { id: P1, name: "Maison" });
+    await tabA.mutate("renameProperty", { id: P1, name: "Villa" });
+
+    await tabA.syncNow();
+
+    const state = await waitForState(
+      tabB,
+      (s) => s.rejections.length > 0 && s.pending.length === 0,
+    );
+    expect(state.rejections).toEqual(tabA.getState().rejections);
+    expect(heardInB).toHaveBeenCalledOnce();
   });
 });
 

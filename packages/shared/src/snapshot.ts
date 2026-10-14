@@ -71,11 +71,12 @@ export class SnapshotTx implements MutatorTx {
 /**
  * Replays mutations in order. Each one runs in its own transaction, so a rejected mutation
  * leaves no partial writes behind (mirrors the server, which uses one savepoint per mutation).
+ * `onRejected` also receives the state the mutation was refused on.
  */
 export async function applyMutations(
   base: Snapshot,
   mutations: readonly Mutation[],
-  onRejected?: (mutation: Mutation, error: MutationRejectedError) => void,
+  onRejected?: (mutation: Mutation, error: MutationRejectedError, before: Snapshot) => void,
 ): Promise<Snapshot> {
   let snapshot = base;
   for (const mutation of mutations) {
@@ -85,7 +86,7 @@ export async function applyMutations(
       snapshot = tx.commit();
     } catch (error) {
       if (!(error instanceof MutationRejectedError)) throw error;
-      onRejected?.(mutation, error);
+      onRejected?.(mutation, error, snapshot);
     }
   }
   return snapshot;

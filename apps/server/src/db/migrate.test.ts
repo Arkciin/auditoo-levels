@@ -14,13 +14,13 @@ describe("migrate", () => {
   afterEach(() => db.close());
 
   it("applies pending migrations once", async () => {
-    expect(await migrate(db)).toEqual(["001_init", "002_server_epoch"]);
+    const all = ["001_init", "002_server_epoch", "003_rejected_mutations"];
+    expect(await migrate(db)).toEqual(all);
     expect(await migrate(db)).toEqual([]);
 
-    expect(await db.query("SELECT name FROM schema_migrations ORDER BY name")).toEqual([
-      { name: "001_init" },
-      { name: "002_server_epoch" },
-    ]);
+    expect(await db.query("SELECT name FROM schema_migrations ORDER BY name")).toEqual(
+      all.map((name) => ({ name })),
+    );
     expect(await db.query("SELECT id, version FROM server_meta")).toEqual([{ id: 1, version: 0 }]);
   });
 

@@ -66,6 +66,7 @@ describe("push and pull", () => {
       lastMutationId: 3,
       version: 3,
       changed: true,
+      rejected: [],
     });
 
     const first = await pull(DEVICE_A, 0);
@@ -122,6 +123,7 @@ describe("push and pull", () => {
       lastMutationId: 4,
       version: 4,
       changed: true,
+      rejected: [],
     });
   });
 
@@ -135,9 +137,96 @@ describe("push and pull", () => {
       ],
     });
 
-    expect(result).toEqual({ lastMutationId: 3, version: 2, changed: true });
+    // Reported by id and reason only: nothing of what the user typed is sent back.
+    expect(result).toEqual({
+      lastMutationId: 3,
+      version: 2,
+      changed: true,
+      rejected: [{ id: 2, reason: "not_applicable" }],
+    });
     const { changes } = await pull(DEVICE_A, 0);
     expect(changes.levels.map((level) => level.id)).toEqual([RDC]);
+  });
+
+  it("reports a rejection again to a retry, which finds the mutation already processed", async () => {
+    const ghost = mutation(2, { name: "renameLevel", args: { id: UNKNOWN, name: "Fantôme" } });
+    const first = await push({ clientId: DEVICE_A, mutations: [createProperty, ghost] });
+    expect(first.rejected).toEqual([{ id: 2, reason: "not_applicable" }]);
+
+    // The response was lost: the device sends the same mutations again, with a new one.
+    const retry = await push({
+      clientId: DEVICE_A,
+      mutations: [createProperty, ghost, { ...createLevel, id: 3 }],
+    });
+    expect(retry).toEqual({
+      lastMutationId: 3,
+      version: 2,
+      changed: true,
+      rejected: [{ id: 2, reason: "not_applicable" }],
+    });
+
+    // Pushes that no longer carry it do not mention it, nor do those of other devices.
+    const rename = mutation(4, { name: "renameLevel", args: { id: RDC, name: "Rez-de-chaussée" } });
+    expect((await push({ clientId: DEVICE_A, mutations: [rename] })).rejected).toEqual([]);
+    const other = mutation(2, { name: "renameProperty", args: { id: PROPERTY, name: "Villa" } });
+    expect((await push({ clientId: DEVICE_B, mutations: [other] })).rejected).toEqual([]);
+  });
+
+  it("reports a rejection to a retry racing the push it repeats", async () => {
+    const request: ReceivedPushRequest = {
+      clientId: DEVICE_A,
+      mutations: [
+        createProperty,
+        mutation(2, { name: "renameLevel", args: { id: UNKNOWN, name: "Fantôme" } }),
+      ],
+    };
+
+    // Whichever processes the rejected mutation, the other skips it and must still report it.
+    const results = await Promise.all([push(request), push(request)]);
+
+    expect(results.map((result) => result.rejected)).toEqual([
+      [{ id: 2, reason: "not_applicable" }],
+      [{ id: 2, reason: "not_applicable" }],
+    ]);
+  });
+
+  it("processes, and reports, a mutation sent twice in one push once", async () => {
+    const ghost = mutation(2, { name: "renameLevel", args: { id: UNKNOWN, name: "Fantôme" } });
+    const result = await push({ clientId: DEVICE_A, mutations: [ghost, createProperty, ghost] });
+
+    expect(result).toEqual({
+      lastMutationId: 2,
+      version: 1,
+      changed: true,
+      rejected: [{ id: 2, reason: "not_applicable" }],
+    });
+  });
+
+  it("reports the rejections of a push that failed half-way once it is retried", async () => {
+    // The connection drops during the second mutation: the first, rejected, is already committed.
+    let transactions = 0;
+    const flaky: SqlClient = {
+      ...db,
+      transaction: (fn, options) =>
+        ++transactions === 2
+          ? Promise.reject(new Error("Connection terminated unexpectedly"))
+          : db.transaction(fn, options),
+    };
+    const request: ReceivedPushRequest = {
+      clientId: DEVICE_A,
+      mutations: [
+        mutation(1, { name: "renameLevel", args: { id: UNKNOWN, name: "Fantôme" } }),
+        { ...createProperty, id: 2 },
+      ],
+    };
+    await expect(processPush(flaky, request)).rejects.toThrow("Connection terminated");
+
+    expect(await push(request)).toEqual({
+      lastMutationId: 2,
+      version: 1,
+      changed: true,
+      rejected: [{ id: 1, reason: "not_applicable" }],
+    });
   });
 
   it("acknowledges invalid mutations as rejected and still applies the others", async () => {
@@ -153,7 +242,12 @@ describe("push and pull", () => {
       mutations: [createProperty, ...invalid, { ...createLevel, id: 5 }],
     });
 
-    expect(result).toEqual({ lastMutationId: 5, version: 2, changed: true });
+    expect(result).toEqual({
+      lastMutationId: 5,
+      version: 2,
+      changed: true,
+      rejected: [2, 3, 4].map((id) => ({ id, reason: "invalid" })),
+    });
     const { changes } = await pull(DEVICE_A, 0);
     expect(changes.properties.map((property) => property.name)).toEqual(["12 rue des Lilas"]);
     expect(changes.levels.map((level) => level.id)).toEqual([RDC]);
@@ -172,7 +266,12 @@ describe("push and pull", () => {
       ],
     });
 
-    expect(result).toEqual({ lastMutationId: 2, version: 1, changed: true });
+    expect(result).toEqual({
+      lastMutationId: 2,
+      version: 1,
+      changed: true,
+      rejected: [{ id: 1, reason: "refused_by_database" }],
+    });
     const { changes } = await pull(DEVICE_A, 0);
     expect(changes.properties.map((property) => property.name)).toEqual(["Appartement"]);
   });
@@ -188,6 +287,7 @@ describe("push and pull", () => {
       lastMutationId: 20,
       version: 3,
       changed: true,
+      rejected: [],
     });
 
     // Retrying the batch, plus a new mutation further on, applies only the new one.
@@ -196,6 +296,7 @@ describe("push and pull", () => {
       lastMutationId: 42,
       version: 4,
       changed: true,
+      rejected: [],
     });
     const { changes } = await pull(DEVICE_A, 0);
     expect(changes.spaces).toEqual([expect.objectContaining({ id: KITCHEN, name: "Cellier" })]);
@@ -211,7 +312,7 @@ describe("push and pull", () => {
       ],
     });
 
-    expect(deleted).toEqual({ lastMutationId: 5, version: 4, changed: true });
+    expect(deleted).toEqual({ lastMutationId: 5, version: 4, changed: true, rejected: [] });
   });
 
   it("lets an edit win over a concurrent delete", async () => {
@@ -258,6 +359,7 @@ describe("push and pull", () => {
       lastMutationId: 1,
       version: 1,
       changed: false,
+      rejected: [],
     });
     expect((await pull(DEVICE_A, 0)).changes.levels).toEqual([]);
 
@@ -266,6 +368,7 @@ describe("push and pull", () => {
       lastMutationId: 2,
       version: 2,
       changed: true,
+      rejected: [],
     });
     // A device that never pulled has no epoch to send, nor anything to start over from.
     const other = mutation(1, { name: "createProperty", args: { id: newId(), name: "Villa" } });
