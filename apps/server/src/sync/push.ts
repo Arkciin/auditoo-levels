@@ -39,7 +39,7 @@ export async function processPush(
   let state: SyncState | undefined;
   const rejected: RejectedMutation[] = [];
   const alreadyProcessed: number[] = [];
-  for (const mutation of mutations.toSorted((a, b) => a.id - b.id)) {
+  for (const mutation of inIdOrder(mutations)) {
     const outcome = await db.transaction((tx) => processMutation(tx, clientId, epoch, mutation));
     if (!outcome) break;
     if (outcome.alreadyProcessed) alreadyProcessed.push(mutation.id);
@@ -55,6 +55,16 @@ export async function processPush(
     rejected.sort((a, b) => a.id - b.id);
   }
   return { ...state, changed, rejected };
+}
+
+/**
+ * The mutations in id order, each id once (the first one sent): devices never send an id twice,
+ * but a request may, and the response must report each mutation once.
+ */
+function inIdOrder(mutations: readonly MutationEnvelope[]): MutationEnvelope[] {
+  return mutations
+    .toSorted((a, b) => a.id - b.id)
+    .filter((mutation, index, sorted) => mutation.id !== sorted[index - 1]?.id);
 }
 
 interface MutationOutcome {

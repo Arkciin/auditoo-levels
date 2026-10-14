@@ -172,6 +172,18 @@ describe("push and pull", () => {
     expect((await push({ clientId: DEVICE_B, mutations: [other] })).rejected).toEqual([]);
   });
 
+  it("processes, and reports, a mutation sent twice in one push once", async () => {
+    const ghost = mutation(2, { name: "renameLevel", args: { id: UNKNOWN, name: "Fantôme" } });
+    const result = await push({ clientId: DEVICE_A, mutations: [ghost, createProperty, ghost] });
+
+    expect(result).toEqual({
+      lastMutationId: 2,
+      version: 1,
+      changed: true,
+      rejected: [{ id: 2, reason: "not_applicable" }],
+    });
+  });
+
   it("reports the rejections of a push that failed half-way once it is retried", async () => {
     // The connection drops during the second mutation: the first, rejected, is already committed.
     let transactions = 0;

@@ -104,7 +104,11 @@ export class MemoryServer {
         this.rejections.get(request.clientId) ?? new Map<number, RejectionReason>();
       this.rejections.set(request.clientId, rejections);
       const rejected: PushResponse["rejected"] = [];
-      for (const envelope of request.mutations.toSorted((a, b) => a.id - b.id)) {
+      // In id order, each id once, like the server.
+      const envelopes = request.mutations
+        .toSorted((a, b) => a.id - b.id)
+        .filter((envelope, index, sorted) => envelope.id !== sorted[index - 1]?.id);
+      for (const envelope of envelopes) {
         if (envelope.id <= lastMutationId) {
           if (!processed.has(envelope.id)) this.lostMutations.push(envelope);
           // Already processed: reported again, the response that said so may have been lost.
