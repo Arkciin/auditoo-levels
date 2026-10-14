@@ -63,7 +63,10 @@ describe("positionBetween", () => {
   });
 
   it("jitters so that concurrent appends do not collide", () => {
-    const keys = new Set(Array.from({ length: 1000 }, () => positionBetween("a1", null)));
+    // Seeded: with Math.random, 1,000 draws among ~14.5 million suffixes collide ~3 % of the
+    // time (birthday bound), which would make this test flaky without saying anything useful.
+    const random = seeded(7);
+    const keys = new Set(Array.from({ length: 1000 }, () => positionBetween("a1", null, random)));
     expect(keys.size).toBe(1000);
   });
 
