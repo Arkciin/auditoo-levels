@@ -340,12 +340,12 @@ that the list stays strictly ordered with valid keys; 500 appends keep keys at 8
 
 ## Testing strategy
 
-`pnpm test` runs 232 Vitest tests in about 45 s, with no database to install.
+`pnpm test` runs 234 Vitest tests in about 45 s, with no database to install.
 
 | Suite | Tests | Covers |
 | --- | --- | --- |
-| `packages/shared` | 51 | Mutators (edit wins, rejections without partial writes, determinism), positions (fast-check property test), name validation, protocol envelopes (one per mutation), push responses old and new, unknown mutation kinds refused |
-| `apps/server`, on in-memory PGlite | 32 | Idempotent retries, rejected and invalid mutations acknowledged and reported with their reason (again to retries, and after a push failed half-way), database refusals as permanent, sparse ids, no-op mutations, epochs, reset, gapless versions under concurrent pushes; HTTP validation, cache headers, SSE pokes, SPA fallback; migrations |
+| `packages/shared` | 52 | Mutators (edit wins, rejections without partial writes, determinism), positions (fast-check property test), name validation, protocol envelopes (one per mutation), push responses old and new, unknown mutation kinds refused |
+| `apps/server`, on in-memory PGlite | 33 | Idempotent retries, rejected and invalid mutations acknowledged and reported with their reason (again to retries, racing or not, and after a push failed half-way), database refusals as permanent, sparse ids, no-op mutations, epochs, reset, gapless versions under concurrent pushes; HTTP validation, cache headers, SSE pokes, SPA fallback; migrations |
 | `apps/web`, on fake-indexeddb | 149 | `SyncClient` against `MemoryServer`, an in-memory reference implementation of the protocol: rejections reported once (lost responses, replays, startup, other tabs), backoff per trigger; storage (id allocation, atomic pulls, reopened connections), transport errors, React bindings, selectors, French descriptions, naming suggestions, relative times; the convergence simulation (12 tests, below) |
 | Playwright, mobile Chromium | 10 | Create, rename, swipe and undo; levels and rooms entry; drag within and across levels; offline reload then resync; a rename reaching a second device through SSE; a change the server rejects, announced and listed in the sync sheet; the sheet's times kept current |
 
