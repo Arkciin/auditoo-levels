@@ -1,7 +1,7 @@
 import { newId, type Property } from "@repo/shared";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { ChevronRight, EllipsisVertical, Plus, Sparkles, Trash } from "lucide-react";
-import { useState } from "react";
+import { ChevronRight, Download, EllipsisVertical, Plus, Sparkles, Trash } from "lucide-react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { ActionBar, AppHeader, ScreenBody } from "@/components/app-layout";
@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { quote, toastUndo, useSafeMutate } from "@/features/use-safe-mutate";
+import { promptInstall, useInstallOffer } from "@/install";
 import { plural } from "@/lib/suggestions";
 import {
   describeMutationError,
@@ -34,6 +35,7 @@ import {
   useView,
 } from "@/sync";
 import { createExampleProperty } from "./example-property";
+import { InstallSheet } from "./install-sheet";
 
 /** Home: every logement on this device, newest first. */
 export function PropertiesScreen() {
@@ -42,6 +44,10 @@ export function PropertiesScreen() {
   const mutate = useMutate();
   const navigate = useNavigate();
   const [creating, setCreating] = useState(false);
+  const install = useInstallOffer();
+  const [installSheet, setInstallSheet] = useState(false);
+  /** Set when the iOS instructions must open, once the menu has closed. */
+  const openInstallSheet = useRef(false);
 
   const openProperty = (propertyId: string) =>
     navigate({ to: "/logements/$propertyId", params: { propertyId } });
@@ -67,7 +73,27 @@ export function PropertiesScreen() {
                 <EllipsisVertical />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
+            <DropdownMenuContent
+              align="end"
+              onCloseAutoFocus={(event) => {
+                // The sheet opens once the menu has let go of the focus (see SpaceRow).
+                if (!openInstallSheet.current) return;
+                openInstallSheet.current = false;
+                event.preventDefault();
+                setInstallSheet(true);
+              }}
+            >
+              {install ? (
+                <DropdownMenuItem
+                  onSelect={() => {
+                    if (install === "ios") openInstallSheet.current = true;
+                    else void promptInstall();
+                  }}
+                >
+                  <Download />
+                  Installer l’application
+                </DropdownMenuItem>
+              ) : null}
               <DropdownMenuItem onSelect={() => void createExample()}>
                 <Sparkles />
                 Ajouter un logement d’exemple
@@ -98,6 +124,7 @@ export function PropertiesScreen() {
         </Button>
       </ActionBar>
       <NewPropertyDrawer open={creating} onOpenChange={setCreating} onCreated={openProperty} />
+      <InstallSheet open={installSheet} onOpenChange={setInstallSheet} />
     </>
   );
 }

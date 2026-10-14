@@ -6,9 +6,13 @@ import { createRoot } from "react-dom/client";
 import { toast } from "sonner";
 
 import { StorageUnavailable } from "./components/storage-unavailable";
+import { captureInstallPrompt } from "./install";
 import { registerServiceWorker } from "./pwa";
 import { routeTree } from "./routeTree.gen";
 import { createBrowserSyncClient, SyncProvider } from "./sync";
+
+// Before anything is awaited: the browser offers installation once, possibly very early.
+captureInstallPrompt();
 
 const router = createRouter({
   routeTree,
