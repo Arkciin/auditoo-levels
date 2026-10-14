@@ -17,7 +17,9 @@ export const Route = createRootRoute({
 });
 
 /** The app column: mobile-first, centred on larger screens, clear of landscape notches. */
-const appColumn = "mx-auto flex min-h-dvh w-full max-w-app flex-col px-safe";
+// `overflow-x-clip` (unlike `hidden`) keeps sticky headers working: a safety net, since any
+// horizontal overflow makes mobile browsers zoom out the whole page.
+const appColumn = "mx-auto flex min-h-dvh w-full max-w-app flex-col overflow-x-clip px-safe";
 
 function RootLayout() {
   return (

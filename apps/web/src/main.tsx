@@ -5,8 +5,10 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { toast } from "sonner";
 
-import { registerServiceWorker, requestPersistentStorage } from "./pwa";
+import { StorageUnavailable } from "./components/storage-unavailable";
+import { registerServiceWorker } from "./pwa";
 import { routeTree } from "./routeTree.gen";
+import { createBrowserSyncClient, SyncProvider } from "./sync";
 
 const router = createRouter({
   routeTree,
@@ -22,12 +24,23 @@ declare module "@tanstack/react-router" {
 
 const rootElement = document.getElementById("root");
 if (!rootElement) throw new Error("Missing #root element in index.html");
+const root = createRoot(rootElement);
 
-createRoot(rootElement).render(
-  <StrictMode>
-    <RouterProvider router={router} />
-  </StrictMode>,
-);
+// The local database is the app's source of truth: open it before the first render, so screens
+// render the device's data right away (no loading state, even offline).
+try {
+  const client = await createBrowserSyncClient();
+  root.render(
+    <StrictMode>
+      <SyncProvider client={client}>
+        <RouterProvider router={router} />
+      </SyncProvider>
+    </StrictMode>,
+  );
+} catch (error) {
+  console.error(error);
+  root.render(<StorageUnavailable />);
+}
 
 void registerServiceWorker((apply) => {
   toast("Une nouvelle version de Relevé est disponible.", {
@@ -36,5 +49,3 @@ void registerServiceWorker((apply) => {
     action: { label: "Mettre à jour", onClick: apply },
   });
 });
-
-void requestPersistentStorage();

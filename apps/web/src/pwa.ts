@@ -36,18 +36,3 @@ export async function registerServiceWorker(
     console.warn("Service worker registration failed", error);
   }
 }
-
-/**
- * Asks the browser to keep this origin's storage (IndexedDB holds edits that may not be synced
- * yet) instead of evicting it under storage pressure. Resolves to whether storage is persisted.
- * Chrome and Safari decide silently; Firefox shows a permission prompt.
- */
-export async function requestPersistentStorage(): Promise<boolean> {
-  const storage = navigator.storage as StorageManager | undefined;
-  if (typeof storage?.persist !== "function") return false;
-  try {
-    return (await storage.persisted()) || (await storage.persist());
-  } catch {
-    return false;
-  }
-}

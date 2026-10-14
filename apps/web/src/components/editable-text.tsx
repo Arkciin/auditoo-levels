@@ -1,0 +1,103 @@
+import { NAME_MAX_LENGTH } from "@repo/shared";
+import { useEffect, useRef, useState } from "react";
+
+import { cn } from "@/lib/utils";
+
+/**
+ * Text that turns into an input when tapped: the fastest way to rename on a phone.
+ * Enter or leaving the field saves; Escape cancels; an empty or unchanged value is ignored.
+ * `editing` can be driven from outside (e.g. a "Renommer" menu item).
+ */
+export function EditableText({
+  value,
+  onSave,
+  label,
+  editing: controlledEditing,
+  onEditingChange,
+  className,
+  inputClassName,
+}: {
+  value: string;
+  /** Called with the trimmed new value. May reject: the field then stays open. */
+  onSave: (next: string) => Promise<void> | void;
+  /** Accessible name of the field, e.g. "Nom de la pièce". */
+  label: string;
+  editing?: boolean;
+  onEditingChange?: (editing: boolean) => void;
+  className?: string;
+  inputClassName?: string;
+}) {
+  const [localEditing, setLocalEditing] = useState(false);
+  const editing = controlledEditing ?? localEditing;
+  const inputRef = useRef<HTMLInputElement>(null);
+  const committing = useRef(false);
+
+  function setEditing(next: boolean) {
+    setLocalEditing(next);
+    onEditingChange?.(next);
+  }
+
+  useEffect(() => {
+    if (!editing) return;
+    const input = inputRef.current;
+    input?.focus();
+    input?.select();
+  }, [editing]);
+
+  async function commit() {
+    if (committing.current) return;
+    const next = inputRef.current?.value.trim() ?? "";
+    if (!next || next === value) {
+      setEditing(false);
+      return;
+    }
+    committing.current = true;
+    try {
+      await onSave(next);
+      setEditing(false);
+    } catch {
+      inputRef.current?.focus(); // the caller reported the problem; let the user fix it
+    } finally {
+      committing.current = false;
+    }
+  }
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        defaultValue={value}
+        aria-label={label}
+        maxLength={NAME_MAX_LENGTH}
+        enterKeyHint="done"
+        autoComplete="off"
+        data-no-swipe
+        className={cn(
+          "h-10 w-full min-w-0 rounded-md border border-input bg-card px-2 text-base outline-offset-0",
+          inputClassName,
+        )}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            void commit();
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            setEditing(false);
+          }
+        }}
+        onBlur={() => void commit()}
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className={cn("min-w-0 truncate text-left", className)}
+      aria-label={`${value}, renommer`}
+      onClick={() => setEditing(true)}
+    >
+      {value}
+    </button>
+  );
+}
