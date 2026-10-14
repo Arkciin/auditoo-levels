@@ -15,6 +15,7 @@ import {
   DrawerFooter,
   DrawerHeader,
   DrawerTitle,
+  useOpenedOnce,
 } from "@/components/ui/drawer";
 import {
   DropdownMenu,
@@ -48,6 +49,8 @@ export function PropertiesScreen() {
   const [installSheet, setInstallSheet] = useState(false);
   /** Set when the iOS instructions must open, once the menu has closed. */
   const openInstallSheet = useRef(false);
+  const newPropertyMounted = useOpenedOnce(creating);
+  const installSheetMounted = useOpenedOnce(installSheet);
 
   const openProperty = (propertyId: string) =>
     navigate({ to: "/logements/$propertyId", params: { propertyId } });
@@ -123,8 +126,12 @@ export function PropertiesScreen() {
           Nouveau logement
         </Button>
       </ActionBar>
-      <NewPropertyDrawer open={creating} onOpenChange={setCreating} onCreated={openProperty} />
-      <InstallSheet open={installSheet} onOpenChange={setInstallSheet} />
+      {newPropertyMounted ? (
+        <NewPropertyDrawer open={creating} onOpenChange={setCreating} onCreated={openProperty} />
+      ) : null}
+      {installSheetMounted ? (
+        <InstallSheet open={installSheet} onOpenChange={setInstallSheet} />
+      ) : null}
     </>
   );
 }

@@ -7,6 +7,7 @@ import { ActionBar, AppHeader, ScreenBody } from "@/components/app-layout";
 import { DatumMarker } from "@/components/datum-marker";
 import { EditableText } from "@/components/editable-text";
 import { Button } from "@/components/ui/button";
+import { useOpenedOnce } from "@/components/ui/drawer";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -39,6 +40,7 @@ export function StructureScreen({ propertyId }: { propertyId: string }) {
   const [leaving, setLeaving] = useState<Property | null>(null);
   const focusRenameInput = useRef(false);
   const clearAutoAdd = useCallback(() => setAutoAddLevelId(null), []);
+  const addLevelMounted = useOpenedOnce(addingLevel);
   const property = liveProperty ?? leaving;
 
   if (!property) {
@@ -148,12 +150,14 @@ export function StructureScreen({ propertyId }: { propertyId: string }) {
           Ajouter un niveau
         </Button>
       </ActionBar>
-      <AddLevelDrawer
-        propertyId={propertyId}
-        open={addingLevel}
-        onOpenChange={setAddingLevel}
-        onCreated={setAutoAddLevelId}
-      />
+      {addLevelMounted ? (
+        <AddLevelDrawer
+          propertyId={propertyId}
+          open={addingLevel}
+          onOpenChange={setAddingLevel}
+          onCreated={setAutoAddLevelId}
+        />
+      ) : null}
     </>
   );
 }

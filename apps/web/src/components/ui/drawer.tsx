@@ -1,10 +1,28 @@
 import type * as React from "react";
+import { useState } from "react";
 import { Drawer as DrawerPrimitive } from "vaul";
 
 import { cn } from "@/lib/utils";
 
 function Drawer({ ...props }: React.ComponentProps<typeof DrawerPrimitive.Root>) {
   return <DrawerPrimitive.Root data-slot="drawer" {...props} />;
+}
+
+/**
+ * Whether a sheet opened from outside (`open` prop) belongs in the tree yet: only from its first
+ * opening, so that a screen pays nothing for sheets it never opens (vaul reads the window's size
+ * as a drawer mounts, forcing a layout during the first render), and still once closed, so that
+ * it slides out rather than vanishing.
+ *
+ * ```tsx
+ * const mounted = useOpenedOnce(open);
+ * {mounted ? <SomeSheet open={open} onOpenChange={setOpen} /> : null}
+ * ```
+ */
+function useOpenedOnce(open: boolean): boolean {
+  const [opened, setOpened] = useState(open);
+  if (open && !opened) setOpened(true);
+  return opened || open;
 }
 
 function DrawerTrigger({ ...props }: React.ComponentProps<typeof DrawerPrimitive.Trigger>) {
@@ -123,4 +141,5 @@ export {
   DrawerPortal,
   DrawerTitle,
   DrawerTrigger,
+  useOpenedOnce,
 };
