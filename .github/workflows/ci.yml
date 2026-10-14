@@ -44,6 +44,11 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # Compressed sizes of the built app; fails when what a phone downloads before the first
+      # screen outgrows its budget (scripts/bundle-size.mjs).
+      - name: Bundle size budget
+        run: pnpm size
+
       # The Chromium build matching the installed @playwright/test, with its system libraries.
       - name: Install Playwright's Chromium
         run: pnpm --filter @repo/web exec playwright install --with-deps chromium
