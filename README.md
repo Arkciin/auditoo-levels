@@ -147,7 +147,7 @@ The server reads its environment at startup (`apps/server/src/env.ts`); blank va
 
 ```sh
 pnpm test                 # 275 unit, integration and component tests, about a minute
-pnpm build && pnpm e2e    # 15 end-to-end tests, accessibility and security included
+pnpm build && pnpm e2e    # 16 end-to-end tests, accessibility and security included
 ```
 
 - **Unit and integration tests** (Vitest) cover the shared domain, the server on an in-memory
