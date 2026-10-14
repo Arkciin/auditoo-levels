@@ -14,7 +14,11 @@ import { test as base, expect, type Locator, type Page } from "@playwright/test"
 
 export { expect };
 
-export const test = base.extend<{ secondDevice: Page; noUncaughtErrors: undefined }>({
+export const test = base.extend<{
+  secondDevice: Page;
+  noUncaughtErrors: undefined;
+  cspViolations: string[];
+}>({
   /**
    * Another phone: a separate browser context, so its own IndexedDB and sync client id. Contexts
    * created in a test inherit the project's options (device emulation, base URL).
@@ -23,9 +27,11 @@ export const test = base.extend<{ secondDevice: Page; noUncaughtErrors: undefine
     const context = await browser.newContext();
     const page = await context.newPage();
     const errors = uncaughtErrors(page);
+    const violations = await reportCspViolations(page);
     await use(page);
     await context.close();
     expect(errors, "uncaught exceptions on the second device").toEqual([]);
+    expect(violations, "Content Security Policy violations on the second device").toEqual([]);
   },
 
   /** Fails the test if the page throws an uncaught exception, even when the screen looks right. */
@@ -37,6 +43,19 @@ export const test = base.extend<{ secondDevice: Page; noUncaughtErrors: undefine
     },
     { auto: true },
   ],
+
+  /**
+   * Fails the test if the server's Content Security Policy blocks anything in the page: the app
+   * must work under it. A test that provokes a violation on purpose checks it here, then clears it.
+   */
+  cspViolations: [
+    async ({ page }, use) => {
+      const violations = await reportCspViolations(page);
+      await use(violations);
+      expect(violations, "Content Security Policy violations").toEqual([]);
+    },
+    { auto: true },
+  ],
 });
 
 /** The uncaught exceptions `page` throws from now on. */
@@ -44,6 +63,27 @@ function uncaughtErrors(page: Page): Error[] {
   const errors: Error[] = [];
   page.on("pageerror", (error) => errors.push(error));
   return errors;
+}
+
+/** Set by the page for each `securitypolicyviolation` event. */
+type CspProbe = { e2eReportCspViolation?: (violation: string) => void };
+
+/** The Content Security Policy violations of every document `page` loads from now on. */
+async function reportCspViolations(page: Page): Promise<string[]> {
+  const violations: string[] = [];
+  await page.exposeFunction("e2eReportCspViolation", (violation: string) => {
+    violations.push(violation);
+  });
+  await page.addInitScript(() => {
+    document.addEventListener("securitypolicyviolation", (event) => {
+      // blockedURI: a URL, or "inline" or "eval".
+      const source = event.sourceFile ? ` at ${event.sourceFile}:${event.lineNumber}` : "";
+      (window as CspProbe).e2eReportCspViolation?.(
+        `${event.effectiveDirective} blocked ${event.blockedURI}${source}: ${event.sample}`,
+      );
+    });
+  });
+  return violations;
 }
 
 /** A name no other test, worker or retry uses. */
