@@ -1,5 +1,5 @@
 import type { Property } from "@repo/shared";
-import { Link, useCanGoBack, useRouter } from "@tanstack/react-router";
+import { Link, useRouter } from "@tanstack/react-router";
 import { ArchiveRestore, ArrowLeft, EllipsisVertical, Pencil, Plus, Trash } from "lucide-react";
 import { type MouseEvent, useCallback, useRef, useState } from "react";
 
@@ -22,6 +22,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { quote, toastUndo, useSafeMutate } from "@/features/use-safe-mutate";
+import { previousEntryInDocument } from "@/lib/document-history";
 import { levelsAndRooms, suggestLevelNames } from "@/lib/suggestions";
 import { selectProperty, selectStructure, useSyncStatus, useView } from "@/sync";
 import { AddLevelDrawer } from "./add-level-drawer";
@@ -34,7 +35,7 @@ export function StructureScreen({ propertyId }: { propertyId: string }) {
   const liveProperty = useView((view) => selectProperty(view, propertyId));
   const structure = useView((view) => selectStructure(view, propertyId));
   const status = useSyncStatus();
-  const router = useRouter();
+  const leaveToList = useLeaveToList();
   const safeMutate = useSafeMutate();
   const addLevel = useAddLevel(propertyId);
   const [addingLevel, setAddingLevel] = useState(false);
@@ -75,13 +76,15 @@ export function StructureScreen({ propertyId }: { propertyId: string }) {
       setLeaving(null);
       return;
     }
-    // In its place, not on top of it: the system back button must not lead to a deleted logement.
-    // A replace, unlike going back, stays within this document whatever the history holds (after
-    // a reload, the list's entry belongs to the previous one), so the undo toast survives it.
-    await router.navigate({ to: "/", replace: true });
-    toastUndo(`Logement ${quote(propertyName)} supprimé`, () => {
-      void safeMutate("restoreProperty", { id: propertyId });
-    });
+    // Off the history, as the back arrow leaves: the system back button must lead neither to a
+    // deleted logement nor to the list a second time. Within this document either way, so that
+    // the undo toast survives it.
+    leaveToList();
+    toastUndo(
+      `Logement ${quote(propertyName)} supprimé`,
+      () => void safeMutate("restoreProperty", { id: propertyId }),
+      propertyId,
+    );
   }
 
   async function quickAdd(name: string) {
@@ -105,12 +108,12 @@ export function StructureScreen({ propertyId }: { propertyId: string }) {
             <DropdownMenuContent
               align="end"
               onCloseAutoFocus={(event) => {
-                // The rename field keeps the focus it just received; the sheet only opens now
-                // that the menu has let go of the focus (see SpaceRow).
+                // The rename field keeps the focus it just received. The sheet only opens now
+                // that the menu has let go of the focus (see SpaceRow), and given it back to its
+                // ⋮: the sheet takes it from there, and gives it back there.
                 const next = afterMenu.current;
                 afterMenu.current = null;
-                if (next === null) return;
-                event.preventDefault();
+                if (next === "rename") event.preventDefault();
                 if (next === "deleted") setDeletedSheet(true);
               }}
             >
@@ -261,17 +264,17 @@ function MissingProperty({ loading }: { loading: boolean }) {
 /**
  * Leaves a logement for the list without stacking a history entry, so that the system back button
  * then leaves the list rather than reopening the logement. Within the app, a logement is only ever
- * opened from the list: an earlier entry of the app's history is the list, and going back to it
- * takes the logement off the stack, as the system back button would. Without one (a link opened
- * from elsewhere, a new tab), the list replaces the logement.
+ * opened from the list: an earlier entry of this document's history is the list, and going back
+ * to it takes the logement off the stack, as the system back button would. Without one (a link
+ * opened from elsewhere, a new tab, a reload, after which the list's entry belongs to the previous
+ * document and going back would load the app again), the list replaces the logement.
  */
 function useLeaveToList(): () => void {
   const router = useRouter();
-  const canGoBack = useCanGoBack();
   return useCallback(() => {
-    if (canGoBack) router.history.back();
+    if (previousEntryInDocument(router.history.location.state.__TSR_index)) router.history.back();
     else void router.navigate({ to: "/", replace: true });
-  }, [router, canGoBack]);
+  }, [router]);
 }
 
 /** A link's plain click leaves with `leave`; a modified one (new tab…) keeps the link's way. */

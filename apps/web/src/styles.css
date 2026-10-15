@@ -51,6 +51,9 @@
 
   /* Height of a bottom action bar, safe-area inset excluded. Toasts are lifted above it. */
   --action-bar-height: 4.5rem;
+  /* Height of the sticky header, safe area included. AppHeader keeps it current: the offline
+     banner under the header comes and goes, over a varying number of lines. */
+  --header-height: calc(3.5rem + env(safe-area-inset-top));
 }
 
 @media (prefers-color-scheme: dark) {
@@ -164,9 +167,16 @@
     color-scheme: light dark;
     /* No pull-to-refresh or scroll chaining: they would fight drag-and-drop gestures. */
     overscroll-behavior-y: none;
-    /* What gets scrolled into view (a level just copied, a control reached with Tab) stays clear
-       of the sticky header and of the bottom action bar. */
-    scroll-padding-top: calc(3.5rem + env(safe-area-inset-top));
+  }
+
+  /* What gets scrolled into view (a level just copied, a control reached with Tab) stays clear
+     of the sticky header, offline banner included, and of the bottom action bar (WCAG 2.4.11).
+     Except while a control of those bars has the focus, as a tap gives it: the browser would
+     scroll the page to "reveal" it from under the padding, all the way to the top for a button
+     of the sticky header. (Scroll margins on the content instead would do for `scrollIntoView`,
+     but Chrome ignores them when revealing what Tab focuses.) */
+  html:not(:has(header :focus, [data-slot="action-bar"] :focus)) {
+    scroll-padding-top: var(--header-height);
     scroll-padding-bottom: calc(var(--action-bar-height) + env(safe-area-inset-bottom));
   }
 
@@ -224,6 +234,12 @@
  */
 [data-sonner-toaster][data-sonner-theme] {
   font-family: inherit;
+}
+
+/* A toast takes its taps even while a modal sheet makes the page inert (`pointer-events: none` on
+   body): never through it, to what lies under it. Not the hidden ones of a long stack. */
+[data-sonner-toaster] [data-sonner-toast]:not([data-visible="false"]) {
+  pointer-events: auto;
 }
 
 [data-sonner-toaster] [data-sonner-toast][data-styled="true"] {

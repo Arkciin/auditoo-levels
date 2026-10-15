@@ -1,11 +1,31 @@
 import type * as React from "react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Drawer as DrawerPrimitive } from "vaul";
 
+import { useToastsMakeWay } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
 
-function Drawer({ ...props }: React.ComponentProps<typeof DrawerPrimitive.Root>) {
-  return <DrawerPrimitive.Root data-slot="drawer" {...props} />;
+function Drawer({
+  open,
+  defaultOpen,
+  onOpenChange,
+  ...props
+}: React.ComponentProps<typeof DrawerPrimitive.Root>) {
+  // A sheet without `open` (uncontrolled) is followed through `onOpenChange`.
+  const [openedHere, setOpenedHere] = useState(defaultOpen ?? false);
+  useToastsMakeWay(open ?? openedHere);
+  return (
+    <DrawerPrimitive.Root
+      data-slot="drawer"
+      open={open}
+      defaultOpen={defaultOpen}
+      onOpenChange={(next) => {
+        setOpenedHere(next);
+        onOpenChange?.(next);
+      }}
+      {...props}
+    />
+  );
 }
 
 /**
@@ -66,18 +86,71 @@ function DrawerOverlay({
 
 // A sheet: surface colour, 0.75rem radius, hairline edge, no shadow. Bottom sheets keep their
 // content clear of the home indicator (safe-area inset).
+//
+// The focus goes into the sheet as it opens (vaul leaves it outside by default, on a page then
+// hidden from assistive technologies, and Tab would leave the sheet), and back to what had it
+// once the sheet has closed: the trigger, or a menu's ⋮ for a sheet opened from a menu.
 function DrawerContent({
   className,
   children,
+  initialFocus,
+  onOpenAutoFocus,
+  onCloseAutoFocus,
+  onPointerDownOutside,
   ...props
-}: React.ComponentProps<typeof DrawerPrimitive.Content>) {
+}: React.ComponentProps<typeof DrawerPrimitive.Content> & {
+  /**
+   * What takes the focus as the sheet opens: a field, when typing is the point of the sheet.
+   * By default the sheet itself, which screen readers announce with its title and description,
+   * and from which Tab goes on to its first control: neither a field whose keyboard would pop up
+   * over the choices, nor a button that the Enter still held down on the trigger would press.
+   */
+  initialFocus?: React.RefObject<HTMLElement | null>;
+}) {
+  /** What had the focus when the sheet opened. */
+  const opener = useRef<HTMLElement | null>(null);
   return (
     <DrawerPortal data-slot="drawer-portal">
       <DrawerOverlay />
       <DrawerPrimitive.Content
         data-slot="drawer-content"
+        onOpenAutoFocus={(event) => {
+          onOpenAutoFocus?.(event);
+          if (event.defaultPrevented) return;
+          event.preventDefault();
+          const focused = document.activeElement;
+          opener.current =
+            focused instanceof HTMLElement && focused !== document.body ? focused : null;
+          const sheet = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+          (initialFocus?.current ?? sheet)?.focus({ preventScroll: true });
+        }}
+        onCloseAutoFocus={(event) => {
+          onCloseAutoFocus?.(event);
+          if (event.defaultPrevented) return;
+          const target = opener.current;
+          opener.current = null;
+          // What the sheet's action gave the focus to (a new level's room field) keeps it.
+          if (document.activeElement !== null && document.activeElement !== document.body) {
+            event.preventDefault();
+            return;
+          }
+          // Otherwise Radix gives it to the sheet's DrawerTrigger, if it has one.
+          if (!target?.isConnected) return;
+          event.preventDefault();
+          target.focus({ preventScroll: true });
+        }}
+        onPointerDownOutside={(event) => {
+          onPointerDownOutside?.(event);
+          // A toast shows over the backdrop while a sheet is open (see sonner.tsx): a tap on it
+          // is for the toast, not a tap beside the sheet that closes it.
+          if (event.target instanceof Element && event.target.closest("[data-sonner-toaster]")) {
+            event.preventDefault();
+          }
+        }}
         className={cn(
-          "group/drawer-content fixed z-50 flex h-auto flex-col bg-card text-card-foreground",
+          // Focused itself as it opens: the sheet sliding in shows where the focus is, and a ring
+          // around it would only draw its frame.
+          "group/drawer-content fixed z-50 flex h-auto flex-col bg-card text-card-foreground focus-visible:outline-hidden",
           "data-[vaul-drawer-direction=top]:inset-x-0 data-[vaul-drawer-direction=top]:top-0 data-[vaul-drawer-direction=top]:mb-24 data-[vaul-drawer-direction=top]:max-h-[85dvh] data-[vaul-drawer-direction=top]:rounded-b-xl data-[vaul-drawer-direction=top]:border-b data-[vaul-drawer-direction=top]:pt-safe",
           "data-[vaul-drawer-direction=bottom]:inset-x-0 data-[vaul-drawer-direction=bottom]:bottom-0 data-[vaul-drawer-direction=bottom]:mt-24 data-[vaul-drawer-direction=bottom]:max-h-[85dvh] data-[vaul-drawer-direction=bottom]:rounded-t-xl data-[vaul-drawer-direction=bottom]:border-t data-[vaul-drawer-direction=bottom]:pb-safe",
           "data-[vaul-drawer-direction=right]:inset-y-0 data-[vaul-drawer-direction=right]:right-0 data-[vaul-drawer-direction=right]:w-3/4 data-[vaul-drawer-direction=right]:border-l data-[vaul-drawer-direction=right]:sm:max-w-sm",

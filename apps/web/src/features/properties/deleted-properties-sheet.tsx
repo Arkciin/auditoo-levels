@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { toast } from "sonner";
 
 import { DeletedRow, deletedDetails, NothingDeleted } from "@/components/deleted-row";
 import {
@@ -10,7 +9,7 @@ import {
   DrawerTitle,
   useHeldWhileClosing,
 } from "@/components/ui/drawer";
-import { quote, useSafeMutate } from "@/features/use-safe-mutate";
+import { quote, toastRestored, useSafeMutate } from "@/features/use-safe-mutate";
 import { levelsAndRooms } from "@/lib/suggestions";
 import { useView } from "@/sync";
 import { type DeletedPropertySummary, selectDeletedProperties } from "@/sync/selectors";
@@ -50,7 +49,7 @@ function DeletedProperties({ open, onRestore }: { open: boolean; onRestore: () =
   async function restore({ property }: DeletedPropertySummary) {
     onRestore();
     if (await safeMutate("restoreProperty", { id: property.id })) {
-      toast.success(`Logement ${quote(property.name)} restauré`);
+      toastRestored(`Logement ${quote(property.name)} restauré`, property.id);
     }
   }
 

@@ -89,12 +89,12 @@ export function PropertiesScreen() {
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="end"
-              onCloseAutoFocus={(event) => {
-                // A sheet opens once the menu has let go of the focus (see SpaceRow).
+              onCloseAutoFocus={() => {
+                // A sheet opens once the menu has let go of the focus (see SpaceRow), and given it
+                // back to its ⋮: the sheet takes it from there, and gives it back there.
                 const sheet = sheetAfterMenu.current;
                 if (sheet === null) return;
                 sheetAfterMenu.current = null;
-                event.preventDefault();
                 if (sheet === "install") setInstallSheet(true);
                 else setDeletedSheet(true);
               }}
@@ -166,9 +166,11 @@ function PropertyRow({ summary }: { summary: PropertySummary }) {
 
   async function remove() {
     if (await safeMutate("deleteProperty", { id: property.id })) {
-      toastUndo(`Logement ${quote(property.name)} supprimé`, () => {
-        void safeMutate("restoreProperty", { id: property.id });
-      });
+      toastUndo(
+        `Logement ${quote(property.name)} supprimé`,
+        () => void safeMutate("restoreProperty", { id: property.id }),
+        property.id,
+      );
     }
   }
 
@@ -185,7 +187,9 @@ function PropertyRow({ summary }: { summary: PropertySummary }) {
             className="flex min-h-16 min-w-0 flex-1 items-center gap-3 py-3 pr-2 pl-4 outline-offset-[-2px]"
           >
             <div className="min-w-0 flex-1">
-              <p className="truncate font-semibold">{property.name}</p>
+              {/* Two lines: an address cut on one would lose its end, the postcode and the city,
+                  which tell apart addresses that start alike. */}
+              <p className="line-clamp-2 font-semibold break-words">{property.name}</p>
               <p className="text-sm text-muted-foreground tabular-nums">
                 {levelsAndRooms(levelCount, spaceCount)}
               </p>
@@ -250,6 +254,7 @@ function NewPropertyDrawer({
   onCreated: (propertyId: string) => void;
 }) {
   const safeMutate = useSafeMutate();
+  const nameField = useRef<HTMLInputElement>(null);
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -266,7 +271,8 @@ function NewPropertyDrawer({
 
   return (
     <Drawer open={open} onOpenChange={onOpenChange}>
-      <DrawerContent>
+      {/* The address is all it asks for: the field takes the focus, and the keyboard shows. */}
+      <DrawerContent initialFocus={nameField}>
         <form onSubmit={(event) => void submit(event)}>
           <DrawerHeader>
             <DrawerTitle>Nouveau logement</DrawerTitle>
@@ -276,6 +282,7 @@ function NewPropertyDrawer({
           </DrawerHeader>
           <div className="px-4">
             <Input
+              ref={nameField}
               name="name"
               aria-label="Adresse ou nom du logement"
               placeholder="12 rue des Lilas, Lyon"
@@ -283,7 +290,6 @@ function NewPropertyDrawer({
               enterKeyHint="done"
               maxLength={NAME_MAX_LENGTH}
               required
-              autoFocus
             />
           </div>
           <DrawerFooter>

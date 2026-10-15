@@ -1,5 +1,5 @@
 import { NAME_MAX_LENGTH } from "@repo/shared";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -8,6 +8,7 @@ import {
   DrawerDescription,
   DrawerHeader,
   DrawerTitle,
+  useHeldWhileClosing,
 } from "@/components/ui/drawer";
 import { Input } from "@/components/ui/input";
 import { suggestLevelNames } from "@/lib/suggestions";
@@ -32,19 +33,30 @@ export function AddLevelDrawer({
     [structure],
   );
   const addLevel = useAddLevel(propertyId);
-  // One level per opening. The sheet takes a moment to slide away, and the next floor's
-  // suggestion replaces the one just tapped: a double tap would add R+1, then R+2.
+  // One level per opening: the sheet takes a moment to slide away, and a double tap would add
+  // R+1, then R+2.
   const picked = useRef(false);
   useEffect(() => {
     if (open) picked.current = false;
   }, [open]);
+  // And from the tap on, the suggestions hold still until the sheet opens again: the level just
+  // added would turn « R+2 » into « R+3 » under the finger as the sheet slides away.
+  const [picking, setPicking] = useState(false);
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) setPicking(false);
+  }
+  const shown = useHeldWhileClosing(suggestions, open && !picking);
 
   async function add(name: string) {
     if (picked.current) return;
     picked.current = true;
+    setPicking(true);
     const id = await addLevel(name);
     if (!id) {
       picked.current = false; // not saved, and the user was told why: let them try again
+      setPicking(false);
       return;
     }
     onOpenChange(false);
@@ -59,7 +71,7 @@ export function AddLevelDrawer({
           <DrawerDescription>Touchez une suggestion ou saisissez un autre nom.</DrawerDescription>
         </DrawerHeader>
         <div className="grid grid-cols-2 gap-2 px-4">
-          {suggestions.map((name) => (
+          {shown.map((name) => (
             <Button key={name} variant="outline" size="lg" onClick={() => void add(name)}>
               {name}
             </Button>

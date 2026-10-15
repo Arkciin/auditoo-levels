@@ -75,13 +75,16 @@ describe("AddLevelDrawer", () => {
     expect(levelNames()).toEqual(["RDC", "R+1"]);
   });
 
-  it("ignores taps once a level is added, while the sheet slides away", async () => {
+  it("holds its suggestions still once a level is added, and ignores taps, while it slides away", async () => {
     const sheet = renderSheet({ stayOpen: true });
+    const suggestion = within(sheet).getByRole("button", { name: "R+1" });
 
-    fireEvent.click(within(sheet).getByRole("button", { name: "R+1" }));
+    fireEvent.click(suggestion);
     await waitFor(() => expect(levelNames()).toEqual(["RDC", "R+1"]));
-    // The next floor is now suggested where R+1 was, under the finger.
-    fireEvent.click(within(sheet).getByRole("button", { name: "R+2" }));
+    // R+1 stays under the finger, rather than turning into the next floor.
+    expect(suggestion).toBeInTheDocument();
+    expect(within(sheet).queryByRole("button", { name: "R+2" })).toBeNull();
+    fireEvent.click(suggestion);
     await settled();
 
     expect(levelNames()).toEqual(["RDC", "R+1"]);
