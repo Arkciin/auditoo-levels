@@ -120,7 +120,7 @@ function summarizer(view: Snapshot): (property: Property) => PropertySummary {
   });
 }
 
-// --- Deleted entities, which « Récemment supprimés » offers to restore ---------------------------
+// --- Deleted entities, which « Logements supprimés » and « Éléments supprimés » offer to restore
 
 /** A deleted property, with the structure restoring it brings back: deleting it left it as is. */
 export interface DeletedPropertySummary extends PropertySummary {
