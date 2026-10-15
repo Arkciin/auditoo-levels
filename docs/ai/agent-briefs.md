@@ -106,3 +106,100 @@ server, the client engine and the app shell at the same time without stepping on
 > Write DESIGN.md (≤ 500 lines, the brief's required sections), README.md and CLAUDE.md. Crisp,
 > opinionated, every decision with its why, file paths so a reviewer can jump to the code. Verify
 > every claim against the code, run the tests for real counts, and report any inconsistency found.
+
+---
+
+# The night of 14 to 15 October
+
+Same pattern, at a larger scale: the lead ran agents in waves of three or four, each in its own git
+worktree and branch, with ports and scratch directories of its own so that their test servers
+never collided, and merged each wave before starting the next. Two rules were added to every
+brief: **tests that fail without the fix** (agents ran their new tests against the old build), and
+**stay in your files** (each brief named what the parallel agents owned, so merges stayed small).
+Briefs are condensed below; each ended with the same report format: branch, commits, what changed
+and why, test results, files touched outside the agent's scope, risks.
+
+## Wave 1 (23:35, ~1 h 30)
+
+### 7. Independent review (read-only)
+
+> Fresh eyes on the whole repository before submission: find what a demanding reviewer would
+> criticise, ranked by severity, with concrete evidence. Do not modify anything. Look hardest at
+> the UI written last (rapid taps, pending promises, unmounts during async work, iOS keyboard,
+> StrictMode, accessibility, touch targets, offline), then the sync engine and server, then
+> docs that overclaim. Verify suspicions on the production build with Playwright on a Pixel 7.
+
+### 8. Product UX
+
+> Duplicate a level with its rooms in **one atomic mutation** (justify its shape), smart names
+> (R+n → next free floor, bedrooms renumbered), undoable; a ⋮ menu per room (Renommer, Déplacer
+> vers…, Supprimer) as the gesture-free path; installable PWA made obvious (Android prompt, iOS
+> instructions); a toast when the app first works offline.
+
+### 9. Sync feedback
+
+> No silent rejections: the push response lists rejected mutation ids with reason codes (no user
+> data echoed), backward compatible; the device announces them in French, naming the change and
+> why; the sync sheet lists them. Make the backoff comment true. One `quote()`. Derive
+> `mutationSchema` from the mutators, or make a missing envelope fail typecheck.
+
+### 10. Quality
+
+> Component tests of the gesture-heavy components (behaviour through the DOM, not internals); an
+> axe gate on every screen and sheet in both themes; Lighthouse scripted and its scores in the
+> README; a strict Content Security Policy proven by an e2e test; a bundle budget in CI.
+
+## Wave 2 (01:35, ~1 h 30): fixing the review
+
+### 11. Touch safety
+
+> « Terminé » must keep the room being typed. A finger drags only after holding a handle (a flick
+> on a handle must scroll), proven with real touch events. Undo for moves. Swipes sized to what
+> they delete: a level or a logement only reveals a button. Chips keep the focus and stay under
+> the thumb. Focus after every action. French screen-reader wording.
+
+### 12. Navigation and recovery
+
+> Back goes back (no loops, no « Logement introuvable » flash). Deleted things can come back
+> after the toast: sheets listing them with « Restaurer ». Long addresses as large titles. Sheets
+> mounted on first opening, Lighthouse re-measured. Manifest colours. Docs that contradict the
+> screen.
+
+### 13. Sync: calm, honest, robust
+
+> « Envoi… » only while sending; no pull for one's own poke; « Serveur injoignable » rather than
+> « Hors ligne » on a connected phone; creates refuse existing ids; no queued change may ever
+> lock a device out after an update; pushes capped in bytes; names refuse lone surrogates; the
+> pill's accessible name starts with its visible text.
+
+## Wave 3 (03:50, ~1 h): last look
+
+### 14. Final review (read-only)
+
+> Same as 7, on the merged result, looking hardest at interactions between the night's features:
+> merges are where bugs hide. Check every claim of the README's feature list on a phone.
+
+### 15. Screenshots and demo GIF
+
+> Honest images of the real app with realistic French data, a 25-second demo GIF; write only
+> images; report anything that looked wrong while doing it (that part matters).
+
+### 16. Documentation
+
+> One coherent pass over DESIGN.md (at most 480 lines), README, CLAUDE.md and this folder; every
+> claim verified against the code; real test counts.
+
+## Wave 4 (04:45, ~50 min): the last findings
+
+### 17. Sheets, toasts, focus, scroll
+
+> Toasts over sheets took taps meant for them; focus never entered a sheet; a tap in the header
+> scrolled the page to the top; history after deleting a logement; the add-level sheet changing
+> under the finger; addresses cut before the postcode.
+
+### 18. Small fixes and code quality
+
+> « Serveur injoignable » after the network came back; text being typed lost on the system back
+> button (committed on unmount, but only into what is still alive: edits revive deleted parents);
+> one `withRooms`; one hidden « Renommer » description; French for every message a user can see;
+> one DevTools session per page in e2e, so that offline stays offline.

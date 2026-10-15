@@ -106,5 +106,19 @@ One Claude Code cloud session, linked to my computer, on 14 and 15 October 2026 
   e2e test used `press`, which focuses first, and hid it), and makes the PostgreSQL run
   reproducible: `pnpm e2e:postgres` (`scripts/with-postgres.sh`) and a CI job on PostgreSQL 18,
   the major version Render runs.
-- **Then**, in parallel: a final fresh-eyes review, regenerated screenshots and a demo GIF, and a
-  documentation pass (test counts measured again, DESIGN.md rewritten under 480 lines).
+- **03:50 → 04:35** In parallel:
+  - **A final fresh-eyes review** of the merged result. No critical bug; two majors: toasts sat
+    over sheets and took no taps, so an « Annuler » tapped on an old toast went through to the
+    sheet and moved a room to the level under it; and focus never entered a sheet.
+  - **Screenshots and a demo GIF**, taken from the real app with realistic data. Its engineer
+    found that a tap in the header scrolled the page to the top.
+  - **A documentation pass**: counts measured again, DESIGN.md rewritten under 480 lines.
+- **04:45 → 05:35** Two agents fix the last findings: sheets, toasts, focus and scroll; and small
+  fixes (« Serveur injoignable » after the network came back, typing kept on the system back button
+  but only into what is still alive, one `withRooms`, French in every message a user can see, one
+  DevTools session per page in e2e so that offline stays offline). The lead merges them (455 Vitest
+  tests, 50 end-to-end tests) and gives level and room undo toasts their entity's id, so that a
+  restore replaces them.
+- **05:40 → 06:30** Final checks: lint, typecheck, unit tests, build, bundle budget, the
+  end-to-end suite on PGlite and on PostgreSQL 16. Left for me in the morning: push, deploy on
+  Render once its outage is over, test on my phone, record the Loom, send the email.

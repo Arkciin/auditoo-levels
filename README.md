@@ -14,25 +14,46 @@ wake the server. Once visited, the app opens from its cache and syncs when the s
 
 ## Screenshots
 
+<p align="center">
+  <img src="docs/screenshots/demo.gif" width="300" alt="Phone demo: open a house, add level R+2 from the sheet, add rooms with suggestion chips, drag a room to another level, swipe one away and undo, then add a room offline and watch it sync"><br>
+  <sub>25 seconds on an emulated Pixel 7: levels, rooms, a held-finger drag, a swipe and its undo, offline then synced</sub>
+</p>
+
 <table>
   <tr>
     <td align="center">
-      <img src="docs/screenshots/list.png" width="240" alt="List of logements, with the sync status in the header"><br>
+      <img src="docs/screenshots/list.png" width="200" alt="Home screen listing three logements with their level and room counts, and a green « À jour » sync pill in the header"><br>
       <sub>Logements and sync status</sub>
     </td>
     <td align="center">
-      <img src="docs/screenshots/structure.png" width="240" alt="Levels of a house, each with its rooms"><br>
+      <img src="docs/screenshots/structure.png" width="200" alt="A house's address as a large two-line title, then levels Sous-sol and RDC with their rooms, each row with a ⋮ menu and a drag handle"><br>
       <sub>Levels and rooms</sub>
+    </td>
+    <td align="center">
+      <img src="docs/screenshots/room-menu.png" width="200" alt="A room's ⋮ menu open on « Séjour »: Renommer, Déplacer vers…, Supprimer la pièce"><br>
+      <sub>Every action without a gesture</sub>
+    </td>
+    <td align="center">
+      <img src="docs/screenshots/drag.png" width="200" alt="« Cellier » held by its drag handle and carried from RDC into Sous-sol, lifted with a shadow; a circle marks the finger"><br>
+      <sub>Hold a handle, drag to another level</sub>
     </td>
   </tr>
   <tr>
     <td align="center">
-      <img src="docs/screenshots/offline.png" width="240" alt="Offline banner and pending changes counter"><br>
+      <img src="docs/screenshots/offline.png" width="200" alt="Offline: amber banner and « Hors ligne 2 » pill, with « Chambre 4 » and « Salle d'eau » just added to Combles from suggestion chips"><br>
       <sub>Offline: changes wait on the device</sub>
     </td>
     <td align="center">
-      <img src="docs/screenshots/drag.png" width="240" alt="A room being dragged to another level"><br>
-      <sub>Drag a room to another level</sub>
+      <img src="docs/screenshots/sync-sheet.png" width="200" alt="Offline sync details: five pending changes described in French (added, renamed, moved, level deleted) and « Synchroniser maintenant »"><br>
+      <sub>Pending changes, in plain French</sub>
+    </td>
+    <td align="center">
+      <img src="docs/screenshots/deleted.png" width="200" alt="« Éléments supprimés » sheet with a deleted level (Sous-sol, 2 pièces) and a deleted room (WC 2), each with a Restaurer button"><br>
+      <sub>Anything deleted comes back</sub>
+    </td>
+    <td align="center">
+      <img src="docs/screenshots/dark.png" width="200" alt="The same house in dark mode, scrolled to R+1 and Combles, with the compact title in the header"><br>
+      <sub>Dark mode follows the phone</sub>
     </td>
   </tr>
 </table>
@@ -163,22 +184,22 @@ The server reads its environment at startup (`apps/server/src/env.ts`); blank va
 ## Testing
 
 ```sh
-pnpm test                        # 442 unit, integration and component tests, about 1.5 minutes
-pnpm build && pnpm e2e           # 41 end-to-end tests, accessibility and security included
-pnpm build && pnpm e2e:postgres  # the same 41, on a throwaway PostgreSQL instead of PGlite
+pnpm test                        # 455 unit, integration and component tests, about 1.5 minutes
+pnpm build && pnpm e2e           # 50 end-to-end tests, accessibility and security included
+pnpm build && pnpm e2e:postgres  # the same 50, on a throwaway PostgreSQL instead of PGlite
 ```
 
-- **Unit and integration tests** (Vitest, 353): the shared domain (77), the server on an
+- **Unit and integration tests** (Vitest, 359): the shared domain (77), the server on an
   in-memory PGlite (43, security headers included), and the sync engine on fake-indexeddb against
   an in-memory reference server, including a seeded multi-device convergence simulation with flaky
   networks, restarts and database wipes. A palette test checks the contrast of every colour
   pairing the UI paints, in both themes. To run one project: `pnpm vitest run --project <name>`,
   with `shared`, `server`, `web`, or one half of it, `"web (node)"` or `"web (dom)"`.
-- **Component tests** (89, [Testing Library](https://testing-library.com) on happy-dom) drive the
+- **Component tests** (96, [Testing Library](https://testing-library.com) on happy-dom) drive the
   interaction-heavy components as a user would, by role and French accessible name: the swipe to
   delete, renaming in place and where the focus goes, rapid room entry, the deleted items' sheets,
   the sync indicator. They live next to the components (`*.test.tsx`).
-- **End-to-end tests** (41, Playwright) drive an emulated Pixel 7 against the production server,
+- **End-to-end tests** (50, Playwright) drive an emulated Pixel 7 against the production server,
   which they start on port 4174 (or `E2E_PORT`) with a fresh in-memory database, or the one
   `E2E_DATABASE_URL` names. Every test fails on an uncaught exception or a Content Security Policy
   violation. An accessibility spec scans every screen, sheet, menu and banner with
@@ -216,10 +237,10 @@ What a phone downloads (`pnpm size` after `pnpm build`, 15 October 2026; CI fail
 
 | | gzip | Brotli (sent when accepted) | Budget (gzip) |
 | --- | ---: | ---: | ---: |
-| Entry chunk (React, router, app shell) | 70.3 kB | 61.1 kB | 80 kB |
-| Everything before the first screen (entry and preloads) | 206.8 kB | 181.4 kB | 220 kB |
-| All JavaScript, lazy screens included | 233.6 kB | 205.2 kB | 260 kB |
-| CSS | 8.0 kB | 7.0 kB | 10 kB |
+| Entry chunk (React, router, app shell) | 69.6 kB | 60.5 kB | 80 kB |
+| Everything before the first screen (entry and preloads) | 208.4 kB | 182.7 kB | 220 kB |
+| All JavaScript, lazy screens included | 234.9 kB | 206.3 kB | 260 kB |
+| CSS | 8.3 kB | 7.3 kB | 10 kB |
 
 The server sends a Content Security Policy that keeps everything on the app's origin and scripts
 to its own files (no inline code, no `eval`), a Permissions-Policy that denies the powerful

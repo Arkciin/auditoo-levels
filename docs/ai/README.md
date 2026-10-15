@@ -19,14 +19,16 @@ conventional commits. I set the goal and the constraints (production quality, mo
 offline-first, submit within a day), made the calls that only a human could make (identity,
 accounts, deployment, what to show), and reviewed the checkpoints. At night the loop turned to
 review: an independent, read-only reviewer hunted bugs while three agents built on their own git
-branches; the lead merged the branches, then three more agents fixed what the review had found.
+branches; the lead merged the branches, then three more agents fixed what the review had found,
+and a last wave (a second reviewer, a screenshot engineer, a docs pass, two fixers) closed what was
+left.
 
 ## Verification loops (why the AI output can be trusted)
 
 - **Types and lint everywhere**: strict TypeScript, Biome; no merge without `pnpm check`.
-- **Tests as the contract**: 442 Vitest tests, among them a seeded simulation of three devices
-  going offline at random (`apps/web/src/sync/convergence.test.ts`), 89 component tests driven by
-  role and French name, and a contrast check of the palette; 41 Playwright end-to-end tests on an
+- **Tests as the contract**: 455 Vitest tests, among them a seeded simulation of three devices
+  going offline at random (`apps/web/src/sync/convergence.test.ts`), 96 component tests driven by
+  role and French name, and a contrast check of the palette; 50 Playwright end-to-end tests on an
   emulated phone, each failing on an uncaught exception or a Content Security Policy violation,
   with axe scans of every screen in both themes. CI runs them on PGlite and on PostgreSQL 18, and
   holds the bundle to a budget. Sub-agents checked that their tests catch bugs by injecting faults
@@ -67,5 +69,11 @@ branches; the lead merged the branches, then three more agents fixed what the re
 | « Renommer » in a level's menu left the focus on the page body: no keyboard on a phone. An e2e test used `press`, which focuses first, and hid it | Lead, after merging | The level header drops its menu while renaming; the test checks the focus |
 | DESIGN.md's end-to-end run on PostgreSQL 16 had been done by hand, with nothing to reproduce it | Lead | `pnpm e2e:postgres` (`scripts/with-postgres.sh`) and a CI job on PostgreSQL 18, the major version Render runs |
 | The docs, patched by several agents in parallel, disagreed on the test counts (304 in one place, 275 in another; a run has 442), and listed a limitation (a rejection announced twice after a restart) that a throwaway test disproved | Docs agent, final pass | Counts measured from one run; the limitation rewritten |
+
+| Toasts sat over sheets and took no taps: an « Annuler » tapped on an old toast went through to the sheet and moved a room to the level under it | Final reviewer | Opening a sheet dismisses the toasts on screen; toasts raised while one is open show at the top and take their own taps; a « restauré » toast replaces its undo toast |
+| Focus never entered a sheet, and Tab left it for the app behind | Final reviewer | Sheets take the focus as they open and give it back to what opened them |
+| A tap in the header scrolled the page to the top: with the root's scroll padding, Chrome "revealed" the sticky header's focused button | Screenshot agent, recording the demo | The padding is off while a header or bottom-bar control has the focus, and it measures the header, offline banner included |
+| A name or a room being typed was lost on the system back button | Final reviewer | Committed as the field unmounts, but only into what is still alive: an edit revives deleted parents |
+| Every e2e gesture opened and closed a DevTools session, which silently put an offline page back online | Screenshot agent | One session per page; an e2e test swipes while offline |
 
 The full conversation is available on request.
