@@ -107,12 +107,12 @@ export function StructureScreen({ propertyId }: { propertyId: string }) {
             <DropdownMenuContent
               align="end"
               onCloseAutoFocus={(event) => {
-                // The rename field keeps the focus it just received; the sheet only opens now
-                // that the menu has let go of the focus (see SpaceRow).
+                // The rename field keeps the focus it just received. The sheet only opens now
+                // that the menu has let go of the focus (see SpaceRow), and given it back to its
+                // ⋮: the sheet takes it from there, and gives it back there.
                 const next = afterMenu.current;
                 afterMenu.current = null;
-                if (next === null) return;
-                event.preventDefault();
+                if (next === "rename") event.preventDefault();
                 if (next === "deleted") setDeletedSheet(true);
               }}
             >

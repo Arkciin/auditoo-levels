@@ -1,18 +1,120 @@
+import type { Locator } from "@playwright/test";
 import {
   addLevel,
+  backToList,
   createProperty,
   expect,
   expectRooms,
   expectSynced,
   moveRoomTo,
   roomAction,
+  syncPill,
   test,
   toast,
   typeRooms,
   uniqueName,
 } from "./support";
 
-// Sheets and toasts: a toast never covers a sheet, and no tap goes through one to it.
+// Sheets: the focus goes into them and comes back out to what opened them; a toast never covers
+// one, and no tap goes through a toast to it.
+
+/** Opens a sheet as a keyboard does: the focus on its trigger, then Enter. */
+async function openWithKeyboard(trigger: Locator): Promise<void> {
+  await trigger.focus();
+  await trigger.press("Enter");
+}
+
+/** Picks `item` in the menu of `menuButton` (⋮) with the keyboard. */
+async function pickWithKeyboard(menuButton: Locator, item: string): Promise<void> {
+  await openWithKeyboard(menuButton);
+  await menuButton.page().getByRole("menuitem", { name: item, exact: true }).press("Enter");
+}
+
+/** The focus is in `sheet`, and stays there as Tab goes round. */
+async function expectFocusKept(sheet: Locator): Promise<void> {
+  const page = sheet.page();
+  const focusInSheet = () => sheet.evaluate((element) => element.contains(document.activeElement));
+  for (const key of ["Tab", "Tab", "Shift+Tab", "Shift+Tab", "Shift+Tab"]) {
+    await page.keyboard.press(key);
+    expect(await focusInSheet(), `the focus is still in the sheet after ${key}`).toBe(true);
+  }
+}
+
+async function closeWithEscape(sheet: Locator): Promise<void> {
+  await sheet.page().keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+}
+
+test("each sheet takes the focus as it opens, and gives it back to what opened it", async ({
+  page,
+}) => {
+  await createProperty(page, uniqueName("Maison"));
+  await addLevel(page, "RDC");
+  await typeRooms(page, "RDC", ["Entrée"]);
+  await addLevel(page, "R+1");
+
+  await test.step("« Ajouter un niveau »: the sheet, not its field (no keyboard over the suggestions)", async () => {
+    const trigger = page.getByRole("button", { name: "Ajouter un niveau", exact: true });
+    const sheet = page.getByRole("dialog", { name: "Ajouter un niveau" });
+    await openWithKeyboard(trigger);
+    await expect(sheet).toBeFocused();
+    await expectFocusKept(sheet);
+    await closeWithEscape(sheet);
+    await expect(trigger).toBeFocused();
+  });
+
+  await test.step("« Éléments supprimés », from the logement's menu, and back to its ⋮", async () => {
+    const menuButton = page.getByRole("button", { name: "Actions du logement", exact: true });
+    const sheet = page.getByRole("dialog", { name: "Éléments supprimés" });
+    await pickWithKeyboard(menuButton, "Éléments supprimés");
+    await expect(sheet).toBeFocused();
+    await closeWithEscape(sheet);
+    await expect(menuButton).toBeFocused();
+  });
+
+  await test.step("« Déplacer vers… », from a room's menu, and back to its ⋮", async () => {
+    const menuButton = page.getByRole("button", {
+      name: "Actions de la pièce Entrée",
+      exact: true,
+    });
+    const sheet = page.getByRole("dialog", { name: "Déplacer « Entrée »" });
+    await pickWithKeyboard(menuButton, "Déplacer vers…");
+    await expect(sheet).toBeFocused();
+    await expectFocusKept(sheet);
+    await closeWithEscape(sheet);
+    await expect(menuButton).toBeFocused();
+  });
+
+  await backToList(page);
+
+  await test.step("« Nouveau logement »: its field, ready for typing", async () => {
+    const trigger = page.getByRole("button", { name: "Nouveau logement", exact: true }).last();
+    const sheet = page.getByRole("dialog", { name: "Nouveau logement" });
+    await openWithKeyboard(trigger);
+    await expect(sheet.getByRole("textbox", { name: "Adresse ou nom du logement" })).toBeFocused();
+    await expectFocusKept(sheet);
+    await closeWithEscape(sheet);
+    await expect(trigger).toBeFocused();
+  });
+
+  await test.step("« Logements supprimés », from the home screen's menu, and back to its ⋮", async () => {
+    const menuButton = page.getByRole("button", { name: "Plus d’actions", exact: true });
+    const sheet = page.getByRole("dialog", { name: "Logements supprimés" });
+    await pickWithKeyboard(menuButton, "Logements supprimés");
+    await expect(sheet).toBeFocused();
+    await closeWithEscape(sheet);
+    await expect(menuButton).toBeFocused();
+  });
+
+  await test.step("the sync sheet, and back to the pill", async () => {
+    const sheet = page.getByRole("dialog", { name: "Tout est à jour" });
+    await openWithKeyboard(syncPill(page));
+    await expect(sheet).toBeFocused();
+    await expectFocusKept(sheet);
+    await closeWithEscape(sheet);
+    await expect(syncPill(page)).toBeFocused();
+  });
+});
 
 interface SentPush {
   mutations: Array<{ name: string; args: { name?: string } }>;

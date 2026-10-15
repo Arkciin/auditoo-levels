@@ -89,12 +89,12 @@ export function PropertiesScreen() {
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="end"
-              onCloseAutoFocus={(event) => {
-                // A sheet opens once the menu has let go of the focus (see SpaceRow).
+              onCloseAutoFocus={() => {
+                // A sheet opens once the menu has let go of the focus (see SpaceRow), and given it
+                // back to its ⋮: the sheet takes it from there, and gives it back there.
                 const sheet = sheetAfterMenu.current;
                 if (sheet === null) return;
                 sheetAfterMenu.current = null;
-                event.preventDefault();
                 if (sheet === "install") setInstallSheet(true);
                 else setDeletedSheet(true);
               }}
@@ -252,6 +252,7 @@ function NewPropertyDrawer({
   onCreated: (propertyId: string) => void;
 }) {
   const safeMutate = useSafeMutate();
+  const nameField = useRef<HTMLInputElement>(null);
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -268,7 +269,8 @@ function NewPropertyDrawer({
 
   return (
     <Drawer open={open} onOpenChange={onOpenChange}>
-      <DrawerContent>
+      {/* The address is all it asks for: the field takes the focus, and the keyboard shows. */}
+      <DrawerContent initialFocus={nameField}>
         <form onSubmit={(event) => void submit(event)}>
           <DrawerHeader>
             <DrawerTitle>Nouveau logement</DrawerTitle>
@@ -278,6 +280,7 @@ function NewPropertyDrawer({
           </DrawerHeader>
           <div className="px-4">
             <Input
+              ref={nameField}
               name="name"
               aria-label="Adresse ou nom du logement"
               placeholder="12 rue des Lilas, Lyon"
@@ -285,7 +288,6 @@ function NewPropertyDrawer({
               enterKeyHint="done"
               maxLength={NAME_MAX_LENGTH}
               required
-              autoFocus
             />
           </div>
           <DrawerFooter>
