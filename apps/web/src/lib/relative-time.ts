@@ -9,8 +9,13 @@ export function formatSince(timestamp: number, now: number): string {
   const seconds = Math.round((Math.min(timestamp, now) - now) / 1000);
   if (Math.abs(seconds) < 45) return "à l’instant";
   const minutes = Math.round(seconds / 60);
-  if (Math.abs(minutes) < 60) return relativeTime.format(minutes, "minute");
+  if (Math.abs(minutes) < 60) return format(minutes, "minute");
   const hours = Math.round(minutes / 60);
-  if (Math.abs(hours) < 24) return relativeTime.format(hours, "hour");
-  return relativeTime.format(Math.round(hours / 24), "day");
+  if (Math.abs(hours) < 24) return format(hours, "hour");
+  return format(Math.round(hours / 24), "day");
+}
+
+/** A number and its unit stay on one line (U+00A0): « il y a 2 / minutes » would not do. */
+function format(value: number, unit: Intl.RelativeTimeFormatUnit): string {
+  return relativeTime.format(value, unit).replace(/(\d) /g, "$1\u00a0");
 }

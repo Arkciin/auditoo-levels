@@ -13,8 +13,14 @@ describe("formatSince", () => {
     [59 * MINUTE, "il y a 59 minutes"],
     [3 * 60 * MINUTE, "il y a 3 heures"],
     [24 * 60 * MINUTE, "hier"],
+    [10 * 24 * 60 * MINUTE, "il y a 10 jours"],
   ])("%i ms ago reads « %s »", (ago, expected) => {
-    expect(formatSince(NOW - ago, NOW)).toBe(expected);
+    // Written with plain spaces: a number and its unit are kept together (U+00A0).
+    expect(formatSince(NOW - ago, NOW)).toBe(expected.replace(/(\d) /, "$1\u00a0"));
+  });
+
+  it("never wraps between a number and its unit", () => {
+    expect(formatSince(NOW - 2 * MINUTE, NOW)).toBe("il y a 2\u00a0minutes");
   });
 
   it("never dates something after now, which a ticking clock can lag behind", () => {
