@@ -454,9 +454,11 @@ function LevelSection({
 
   async function remove() {
     if (!(await safeMutate("deleteLevel", { id: level.id }))) return;
-    toastUndo(`Niveau ${quote(level.name)} supprimé${withRooms(spaces.length)}`, () => {
-      void safeMutate("restoreLevel", { id: level.id });
-    });
+    toastUndo(
+      `Niveau ${quote(level.name)} supprimé${withRooms(spaces.length)}`,
+      () => void safeMutate("restoreLevel", { id: level.id }),
+      level.id,
+    );
   }
 
   async function duplicate() {
@@ -643,9 +645,11 @@ function SpaceRow({
 
   async function remove() {
     if (!(await safeMutate("deleteSpace", { id: space.id }))) return;
-    toastUndo(`Pièce ${quote(space.name)} supprimée`, () => {
-      void safeMutate("restoreSpace", { id: space.id });
-    });
+    toastUndo(
+      `Pièce ${quote(space.name)} supprimée`,
+      () => void safeMutate("restoreSpace", { id: space.id }),
+      space.id,
+    );
   }
 
   return (
