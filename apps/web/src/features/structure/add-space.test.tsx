@@ -113,6 +113,16 @@ describe("AddSpace", () => {
     await waitFor(() => expect(roomNames()).toEqual(["Chambre 2", "Chambre 3"]));
   });
 
+  it("numbers a bedroom typed in full as its suggestion would", async () => {
+    const user = renderLevel();
+    await openRoomField(user);
+
+    await user.type(roomField(), "chambre{Enter}");
+    fireEvent.click(suggestion("Chambre"));
+
+    await waitFor(() => expect(roomNames()).toEqual(["Chambre 2", "Chambre 3"]));
+  });
+
   it("numbers a repeated room from its second occurrence", async () => {
     const user = renderLevel();
     await openRoomField(user);
@@ -150,16 +160,28 @@ describe("AddSpace", () => {
     await waitFor(() => expect(roomNames()).toEqual(["Dressing"]));
   });
 
-  it("closes with Escape or « Terminé »", async () => {
+  it("adds the room still being typed when « Terminé » closes the field", async () => {
+    const user = renderLevel();
+    await openRoomField(user);
+
+    await user.type(roomField(), "Cuisine{Enter}Buanderie");
+    await user.click(screen.getByRole("button", { name: "Terminé" }));
+
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    await waitFor(() => expect(roomNames()).toEqual(["Cuisine", "Buanderie"]));
+  });
+
+  it("closes with Escape or « Terminé », giving the focus to « Ajouter une pièce »", async () => {
     const user = renderLevel();
 
     await openRoomField(user);
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ajouter une pièce" })).toHaveFocus();
 
     await openRoomField(user);
     await user.click(screen.getByRole("button", { name: "Terminé" }));
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Ajouter une pièce" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Ajouter une pièce" })).toHaveFocus();
   });
 });

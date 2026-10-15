@@ -9,6 +9,7 @@ import {
   plural,
   suggestLevelNames,
   suggestSpaceNames,
+  typedSpaceName,
 } from "./suggestions";
 
 describe("levelRank", () => {
@@ -79,6 +80,20 @@ describe("nextSpaceName", () => {
   it("numbers other rooms only when they repeat", () => {
     expect(nextSpaceName("WC", ["Cuisine"])).toBe("WC");
     expect(nextSpaceName("WC", ["WC"])).toBe("WC 2");
+  });
+});
+
+describe("typedSpaceName", () => {
+  it("numbers a typed bedroom as its suggestion would, whatever its case and accents", () => {
+    expect(typedSpaceName("chambre", ["Chambre 1", "Chambre 2"])).toBe("Chambre 3");
+    expect(typedSpaceName("CHAMBRE", ["Cuisine"])).toBe("Chambre 1");
+    expect(typedSpaceName("Chambré", ["chambre 4"])).toBe("Chambre 5");
+  });
+
+  it("keeps any other name as typed", () => {
+    expect(typedSpaceName("chambre 5", ["Chambre 1"])).toBe("chambre 5");
+    expect(typedSpaceName("Chambre parentale", ["Chambre 1"])).toBe("Chambre parentale");
+    expect(typedSpaceName("cuisine", ["Cuisine"])).toBe("cuisine");
   });
 });
 

@@ -30,7 +30,10 @@ export function AppHeader({
 /** Bottom bar in the thumb zone for the screen's main action, clear of the home indicator. */
 export function ActionBar({ children }: { children: ReactNode }) {
   return (
-    <div className="fixed inset-x-0 bottom-0 z-20 border-t border-rule bg-background pb-safe">
+    <div
+      data-slot="action-bar"
+      className="fixed inset-x-0 bottom-0 z-20 border-t border-rule bg-background pb-safe"
+    >
       <div className="mx-auto flex h-action-bar max-w-app items-center gap-3 px-4">{children}</div>
     </div>
   );

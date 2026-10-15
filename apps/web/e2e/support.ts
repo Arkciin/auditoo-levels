@@ -163,11 +163,12 @@ export function propertyRow(page: Page, name: string): Locator {
     .filter({ has: page.getByText(name, { exact: true }) });
 }
 
-/** The logement's name in the header of its screen: a button that turns into a field. */
+/**
+ * The logement's name in the header of its screen: a button that turns into a field. Like the
+ * names of levels and rooms, it is named by its text, and described « Renommer ».
+ */
 export function propertyTitle(page: Page, name: string): Locator {
-  return page
-    .getByRole("heading", { level: 1 })
-    .getByRole("button", { name: `${name}, renommer`, exact: true });
+  return page.getByRole("heading", { level: 1 }).getByRole("button", { name, exact: true });
 }
 
 export function backToList(page: Page): Promise<void> {
@@ -205,6 +206,26 @@ export function level(page: Page, name: string): Locator {
   return page.getByRole("region", { name: `Niveau ${name}`, exact: true });
 }
 
+/** A level's name, in its heading: a button that turns into a field. */
+export function levelName(page: Page, name: string): Locator {
+  return level(page, name).getByRole("heading", { level: 2 }).getByRole("button");
+}
+
+/** A level's header, the row that swipes: its name, room count, menu and drag handle. */
+export function levelHeader(page: Page, name: string): Locator {
+  return level(page, name)
+    .locator('[data-slot="swipe-to-delete"]')
+    .filter({ has: page.getByRole("heading", { level: 2 }) });
+}
+
+/**
+ * The « Supprimer » button a swipe reveals on a level or a logement, named after what it deletes:
+ * `deleteButton(page, "le niveau « R+1 »")`.
+ */
+export function deleteButton(page: Page, what: string): Locator {
+  return page.getByRole("button", { name: `Supprimer ${what}`, exact: true });
+}
+
 /** Levels are listed lowest first, each titled by a level-2 heading. */
 export async function expectLevels(page: Page, names: string[]): Promise<void> {
   await expect(page.getByRole("main").getByRole("heading", { level: 2 })).toHaveText(names);
@@ -239,12 +260,18 @@ export function rooms(page: Page, levelName: string): Locator {
 }
 
 export function room(page: Page, levelName: string, name: string): Locator {
-  return rooms(page, levelName).filter({ has: roomName(page, name) });
+  // The name, not the menu (« Actions de la pièce … ») nor the handle (« Déplacer … »).
+  return rooms(page, levelName).filter({ has: page.getByRole("button", { name, exact: true }) });
 }
 
-/** A room's name: a button that turns into a field. */
+/**
+ * A room's name: a button that turns into a field, in a level's list of rooms (a suggestion chip
+ * can bear the same name).
+ */
 export function roomName(page: Page, name: string): Locator {
-  return page.getByRole("button", { name: `${name}, renommer`, exact: true });
+  return page
+    .getByRole("list", { name: /^Pièces du niveau / })
+    .getByRole("button", { name, exact: true });
 }
 
 export async function expectRooms(
@@ -321,7 +348,8 @@ const SWIPE_ATTEMPTS = 3;
 type SwipeProbe = { e2eFingerOnRow?: boolean };
 
 /**
- * Swipes `row` to the left with one finger, well past the 40 % of its width that deletes it.
+ * Swipes `row` to the left with one finger, well past the 40 % of its width that deletes it (a
+ * room), or reveals its « Supprimer » button (a level, a logement: see `deleteButton`).
  *
  * Real touch input through the DevTools protocol, as a phone produces it: pointer events of type
  * "touch", with the browser's own hit testing, implicit pointer capture and `touch-action`
@@ -364,8 +392,12 @@ export async function swipeLeft(row: Locator): Promise<void> {
         throw new Error("The finger kept landing outside the row to swipe");
       }
 
+      // One move per frame, as a finger does. Moves sent back to back make a swipe of several
+      // pixels per millisecond: the browser then takes the next tap (on a revealed « Supprimer »)
+      // for one that stops a fling, and sends no click.
       for (let step = 1; step <= SWIPE_STEPS; step++) {
         await touch("touchMove", fromX + ((toX - fromX) * step) / SWIPE_STEPS, y);
+        await nextFrames(page, 1);
       }
       await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
       return;
@@ -394,56 +426,136 @@ export async function nextFrames(page: Page, count = 2): Promise<void> {
   }, count);
 }
 
-/** The latest drag and drop announcement for screen readers (dnd-kit's live region). */
-async function announcement(page: Page): Promise<string> {
+/**
+ * The latest drag and drop announcement for screen readers (dnd-kit's live region), or an empty
+ * string if no drag started yet.
+ */
+export async function dragAnnouncement(page: Page): Promise<string> {
   // Not a waiting locator: the live region stays empty until a drag starts. Other role="status"
   // elements may exist (the offline banner): the announcement is the one with French quotes.
   const texts = await page.getByRole("status").allTextContents();
   return (texts.find((text) => text.includes("«")) ?? "").replace(/\s+/g, " ").trim();
 }
 
+/** One finger on the touch screen, as `swipeLeft` drives it (DevTools protocol touch input). */
+interface Finger {
+  down(x: number, y: number): Promise<void>;
+  move(x: number, y: number): Promise<void>;
+  up(): Promise<void>;
+}
+
+async function withFinger<T>(page: Page, use: (finger: Finger) => Promise<T>): Promise<T> {
+  const cdp = await page.context().newCDPSession(page);
+  const touch = async (type: "touchStart" | "touchMove", x: number, y: number) => {
+    await cdp.send("Input.dispatchTouchEvent", { type, touchPoints: [{ x, y }] });
+  };
+  try {
+    return await use({
+      down: (x, y) => touch("touchStart", x, y),
+      move: (x, y) => touch("touchMove", x, y),
+      up: async () => {
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      },
+    });
+  } finally {
+    await cdp.detach();
+  }
+}
+
+/** The middle of a visible element, in the viewport's coordinates. */
+async function centre(element: Locator): Promise<{ x: number; y: number }> {
+  await element.hover({ trial: true }); // waits until it is visible, stable and not covered
+  const box = await element.boundingBox();
+  if (!box) throw new Error("The element is not visible");
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+
+/**
+ * A thumb flicking the page from `element`: down, a quick `dy` vertical move (negative is up,
+ * which scrolls down), up. No hold: what a scroll looks like.
+ */
+export async function flick(element: Locator, dy: number): Promise<void> {
+  const page = element.page();
+  const { x, y } = await centre(element);
+  await withFinger(page, async (finger) => {
+    await finger.down(x, y);
+    for (let step = 1; step <= FLICK_STEPS; step++) {
+      await finger.move(x, y + (dy * step) / FLICK_STEPS);
+    }
+    await finger.up();
+  });
+}
+
+const FLICK_STEPS = 10;
 const DRAG_STEP_PX = 8;
 const MAX_DRAG_PX = 800;
 
 /**
- * Drags an item by its handle with the mouse, a few pixels at a time with a couple of frames in
- * between (dnd-kit's PointerSensor starts after 4 px), until dnd-kit announces that `item` is over
- * `target`, then drops it there: the item takes the target's place.
+ * Drags an item by its handle, a few pixels at a time with a couple of frames in between, until
+ * dnd-kit announces that dropped now, `item` would land at `position` ("position 2 sur 4 dans
+ * « RDC »", "position 1 sur 3 parmi les niveaux"), then drops it there. With the mouse (dnd-kit
+ * starts after 4 px), or with a finger, which first holds the handle still until the drag starts.
  *
  * Steering by the announcement, the feedback the app gives screen reader users, rather than by
  * coordinates computed beforehand keeps this independent of the layout, which changes during a
  * drag: levels shrink to their headers, a room entering another level pushes its new neighbours.
  */
-export async function dragOnto(
+export async function dragTo(
   handle: Locator,
-  { item, target, direction }: { item: string; target: string; direction: "up" | "down" },
+  {
+    item,
+    position,
+    direction,
+    input = "mouse",
+  }: { item: string; position: string; direction: "up" | "down"; input?: "mouse" | "touch" },
 ): Promise<void> {
   const page = handle.page();
-  const over = `« ${item} » près de « ${target} ».`;
-  await handle.hover(); // waits until the handle is visible, stable and not covered
-  const box = await handle.boundingBox();
-  if (!box) throw new Error(`The drag handle of ${item} is not visible`);
-  const x = box.x + box.width / 2;
-  let y = box.y + box.height / 2;
-  const step = direction === "up" ? -DRAG_STEP_PX : DRAG_STEP_PX;
-
-  await page.mouse.down();
-  let reached = false;
-  for (let travelled = 0; !reached && travelled < MAX_DRAG_PX; travelled += DRAG_STEP_PX) {
-    y += step;
-    await page.mouse.move(x, y);
-    await nextFrames(page);
-    if ((await announcement(page)) !== over) continue;
-    // Still over the target a few frames later: not a transient state while the layout shifts.
-    await nextFrames(page);
-    reached = (await announcement(page)) === over;
+  const over = `« ${item} », ${position}.`;
+  const start = await centre(handle);
+  const drag = async (pointer: Finger) => {
+    const { x } = start;
+    let y = start.y;
+    const step = direction === "up" ? -DRAG_STEP_PX : DRAG_STEP_PX;
+    await pointer.down(x, y);
+    if (input === "touch") {
+      // The hold: the row follows the finger only once dnd-kit has picked it up and says so (the
+      // live region may still hold the end of a previous drag).
+      await expect
+        .poll(async () => {
+          const said = await dragAnnouncement(page);
+          return said.startsWith(`« ${item} »`) && !said.includes("déposé");
+        })
+        .toBe(true);
+    }
+    let reached = false;
+    for (let travelled = 0; !reached && travelled < MAX_DRAG_PX; travelled += DRAG_STEP_PX) {
+      y += step;
+      await pointer.move(x, y);
+      await nextFrames(page);
+      if ((await dragAnnouncement(page)) !== over) continue;
+      // Still over the target a few frames later: not a transient state while the layout shifts.
+      await nextFrames(page);
+      reached = (await dragAnnouncement(page)) === over;
+    }
+    if (!reached) {
+      const last = await dragAnnouncement(page);
+      await page.keyboard.press("Escape"); // cancels the drag rather than dropping anywhere
+      await pointer.up();
+      throw new Error(`dnd-kit never announced "${over}" (last: "${last}")`);
+    }
+    await pointer.up();
+  };
+  if (input === "touch") {
+    await withFinger(page, drag);
+  } else {
+    await drag({
+      down: async (x, y) => {
+        await page.mouse.move(x, y);
+        await page.mouse.down();
+      },
+      move: (x, y) => page.mouse.move(x, y),
+      up: () => page.mouse.up(),
+    });
   }
-  if (!reached) {
-    const last = await announcement(page);
-    await page.keyboard.press("Escape"); // cancels the drag rather than dropping anywhere
-    await page.mouse.up();
-    throw new Error(`dnd-kit never announced "${over}" (last: "${last}")`);
-  }
-  await page.mouse.up();
-  await expect.poll(() => announcement(page)).toBe(`« ${item} » déposé près de « ${target} ».`);
+  await expect.poll(() => dragAnnouncement(page)).toBe(`« ${item} » déposé, ${position}.`);
 }

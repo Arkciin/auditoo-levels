@@ -2,6 +2,7 @@ import {
   addLevel,
   backToList,
   createProperty,
+  deleteButton,
   expect,
   expectSynced,
   propertyRow,
@@ -51,9 +52,14 @@ test("create a logement, rename it, swipe it away and undo", async ({ page, seco
     await expect(propertyRow(page, name)).toHaveCount(0);
   });
 
-  await test.step("swipe its row to the left, then undo from the toast", async () => {
+  await test.step("swipe its row to the left, tap « Supprimer », then undo from the toast", async () => {
     const message = `Logement « ${newName} » supprimé`;
     await swipeLeft(propertyRow(page, newName));
+    // It goes with all its levels and rooms: the swipe only reveals the button.
+    const remove = deleteButton(page, `le logement « ${newName} »`);
+    await expect(remove).toBeVisible();
+    await expect(propertyRow(page, newName)).toHaveCount(1);
+    await remove.tap();
     await expect(toast(page, message)).toBeVisible();
     await expect(propertyRow(page, newName)).toHaveCount(0);
 

@@ -1,4 +1,5 @@
-import { useMemo } from "react";
+import { NAME_MAX_LENGTH } from "@repo/shared";
+import { useEffect, useMemo, useRef } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -31,10 +32,21 @@ export function AddLevelDrawer({
     [structure],
   );
   const addLevel = useAddLevel(propertyId);
+  // One level per opening. The sheet takes a moment to slide away, and the next floor's
+  // suggestion replaces the one just tapped: a double tap would add R+1, then R+2.
+  const picked = useRef(false);
+  useEffect(() => {
+    if (open) picked.current = false;
+  }, [open]);
 
   async function add(name: string) {
+    if (picked.current) return;
+    picked.current = true;
     const id = await addLevel(name);
-    if (!id) return;
+    if (!id) {
+      picked.current = false; // not saved, and the user was told why: let them try again
+      return;
+    }
     onOpenChange(false);
     onCreated(id);
   }
@@ -59,7 +71,7 @@ export function AddLevelDrawer({
             event.preventDefault();
             const form = event.currentTarget;
             const name = String(new FormData(form).get("name") ?? "").trim();
-            if (!name) return;
+            if (!name || picked.current) return;
             form.reset();
             void add(name);
           }}
@@ -70,7 +82,7 @@ export function AddLevelDrawer({
             placeholder="Autre nom : Mezzanine…"
             autoComplete="off"
             enterKeyHint="done"
-            maxLength={80}
+            maxLength={NAME_MAX_LENGTH}
           />
           <Button type="submit">Ajouter</Button>
         </form>

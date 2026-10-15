@@ -143,7 +143,10 @@ function PropertyRow({ summary }: { summary: PropertySummary }) {
 
   return (
     <li>
-      <SwipeToDelete onDelete={() => void remove()}>
+      <SwipeToDelete
+        onDelete={() => void remove()}
+        confirmLabel={`Supprimer le logement ${quote(property.name)}`}
+      >
         <div className="flex items-center border-b border-rule">
           <Link
             to="/logements/$propertyId"

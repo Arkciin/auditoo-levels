@@ -180,6 +180,17 @@ export function suggestSpaceNames(levelName: string, siblingNames: readonly stri
 }
 
 /**
+ * The name to give a room typed in full, given every room name of the property: as typed, unless
+ * it is a room always numbered, which gets the number its suggestion would ("chambre" becomes
+ * "Chambre 3", as tapping « Chambre » would). Case and accents do not matter; a name typed with
+ * its own number ("Chambre 5") or more words ("Chambre parentale") is kept.
+ */
+export function typedSpaceName(typed: string, existing: readonly string[]): string {
+  const base = [...ALWAYS_NUMBERED].find((numbered) => normalize(numbered) === normalize(typed));
+  return base === undefined ? typed : nextSpaceName(base, existing);
+}
+
+/**
  * The name to give a new room of type `base` given every room name of the property:
  * "Cuisine", then "Cuisine 2"; bedrooms are always numbered ("Chambre 1", "Chambre 2"…).
  */

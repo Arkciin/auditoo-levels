@@ -1,5 +1,6 @@
 import { NAME_MAX_LENGTH } from "@repo/shared";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { cn } from "@/lib/utils";
 
@@ -30,7 +31,10 @@ export function EditableText({
   const [localEditing, setLocalEditing] = useState(false);
   const editing = controlledEditing ?? localEditing;
   const inputRef = useRef<HTMLInputElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
   const committing = useRef(false);
+  const wasEditing = useRef(editing);
+  const hintId = useId();
 
   function setEditing(next: boolean) {
     setLocalEditing(next);
@@ -38,10 +42,18 @@ export function EditableText({
   }
 
   useEffect(() => {
-    if (!editing) return;
-    const input = inputRef.current;
-    input?.focus();
-    input?.select();
+    const closed = wasEditing.current && !editing;
+    wasEditing.current = editing;
+    if (editing) {
+      const input = inputRef.current;
+      input?.focus();
+      input?.select();
+    } else if (closed) {
+      // The field is gone, and the focus with it to the page body, where keyboard and screen
+      // reader users lose their place: back to the name. Unless they took it elsewhere (Tab).
+      const focused = document.activeElement;
+      if (focused === null || focused === document.body) buttonRef.current?.focus();
+    }
   }, [editing]);
 
   async function commit() {
@@ -90,14 +102,30 @@ export function EditableText({
     );
   }
 
+  // Named by the text alone: a heading around it (a level, the logement) takes its name from it,
+  // and must read « RDC », not « RDC, renommer ». What a tap does is its description, kept out
+  // of the page, where it would add to the text of the heading or the row.
   return (
-    <button
-      type="button"
-      className={cn("min-w-0 truncate text-left", className)}
-      aria-label={`${value}, renommer`}
-      onClick={() => setEditing(true)}
-    >
-      {value}
-    </button>
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        data-slot="editable-text"
+        className={cn("min-w-0 truncate text-left", className)}
+        aria-describedby={hintId}
+        onClick={() => setEditing(true)}
+      >
+        {value}
+      </button>
+      {createPortal(
+        <span id={hintId} hidden>
+          {RENAME_HINT}
+        </span>,
+        document.body,
+      )}
+    </>
   );
 }
+
+/** The accessible description of a name that turns into a field. */
+const RENAME_HINT = "Renommer";

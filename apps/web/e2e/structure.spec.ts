@@ -1,11 +1,16 @@
 import {
   addLevel,
   createProperty,
+  deleteButton,
   expect,
   expectLevels,
   expectRooms,
+  level,
   levelAction,
+  levelHeader,
+  levelName,
   moveRoomTo,
+  newRoomInput,
   nextFrames,
   reloadOnceSynced,
   renameInPlace,
@@ -48,13 +53,41 @@ test("add levels from the sheet and rooms by typing or from suggestions", async 
     await expect(structureSummary(page)).toHaveText("3 niveaux, 5 pièces");
   });
 
+  await test.step("« Terminé » keeps the room being typed", async () => {
+    await newRoomInput(page, "RDC").fill("Buanderie");
+    await level(page, "RDC").getByRole("button", { name: "Terminé", exact: true }).tap();
+    await expect(newRoomInput(page, "RDC")).toBeHidden();
+    await expectRooms(page, "RDC", ["Entrée", "Séjour", "Cuisine", "Buanderie"]);
+  });
+
   await test.step("everything is saved", async () => {
     await reloadOnceSynced(page);
     await expectLevels(page, ["Sous-sol", "RDC", "R+1"]);
     await expectRooms(page, "Sous-sol", []);
-    await expectRooms(page, "RDC", ["Entrée", "Séjour", "Cuisine"]);
+    await expectRooms(page, "RDC", ["Entrée", "Séjour", "Cuisine", "Buanderie"]);
     await expectRooms(page, "R+1", ["Chambre 1", "Chambre 2"]);
   });
+});
+
+test("a double tap on a level suggestion adds one level", async ({ page }) => {
+  await createProperty(page, uniqueName("Maison"));
+  await addLevel(page, "RDC");
+  await page.getByRole("button", { name: "Ajouter un niveau", exact: true }).tap();
+  const sheet = page.getByRole("dialog", { name: "Ajouter un niveau" });
+  const suggestion = sheet.getByRole("button", { name: "R+1", exact: true });
+  await suggestion.hover({ trial: true }); // the sheet is up and still
+  const box = await suggestion.boundingBox();
+  if (!box) throw new Error("The « R+1 » suggestion is not visible");
+
+  // A second tap as the sheet slides away, where R+2 is now suggested.
+  await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(sheet.getByRole("button", { name: "R+2", exact: true })).toBeVisible();
+  await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+
+  await expect(sheet).toBeHidden();
+  await expectLevels(page, ["RDC", "R+1"]);
+  await reloadOnceSynced(page);
+  await expectLevels(page, ["RDC", "R+1"]);
 });
 
 test("rename a room in place, undo the deletion of a room or a level", async ({ page }) => {
@@ -82,6 +115,30 @@ test("rename a room in place, undo the deletion of a room or a level", async ({ 
 
     await undo(page, message);
     await expectRooms(page, "RDC", ["Entrée", "Salon", "Cuisine"]);
+  });
+
+  await test.step("swipe a level: it only reveals a button, which a tap elsewhere hides", async () => {
+    await swipeLeft(levelHeader(page, "R+1"));
+    const remove = deleteButton(page, "le niveau « R+1 »");
+    await expect(remove).toBeVisible();
+    await expectLevels(page, ["RDC", "R+1"]);
+
+    await structureSummary(page).tap();
+    await expect(remove).toBeHidden();
+    await expectLevels(page, ["RDC", "R+1"]);
+    await expect(structureSummary(page)).toHaveText("2 niveaux, 5 pièces");
+  });
+
+  await test.step("swipe a level, tap « Supprimer », then undo", async () => {
+    const message = "Niveau « R+1 » supprimé avec ses 2 pièces";
+    await swipeLeft(levelHeader(page, "R+1"));
+    await deleteButton(page, "le niveau « R+1 »").tap();
+    await expect(toast(page, message)).toBeVisible();
+    await expectLevels(page, ["RDC"]);
+
+    await undo(page, message);
+    await expectLevels(page, ["RDC", "R+1"]);
+    await expectRooms(page, "R+1", ["Chambre 1", "Chambre 2"]);
   });
 
   await test.step("delete a level from its menu, then undo", async () => {
@@ -123,6 +180,29 @@ test("the room suggestions stay within reach as rooms pile up above them", async
     await expectRooms(page, "R+1", names);
     await nextFrames(page);
   }
+});
+
+test("quick taps at one spot on a suggestion add as many rooms; the field keeps the focus", async ({
+  page,
+}) => {
+  // A new logement: a short page, which the rooms added lengthen.
+  await createProperty(page, uniqueName("Maison"));
+  await addLevel(page, "R+1");
+  const field = newRoomInput(page, "R+1");
+  const chip = roomSuggestion(page, "R+1", "Chambre");
+  await chip.hover({ trial: true }); // visible and still: the new level has scrolled into view
+  const box = await chip.boundingBox();
+  if (!box) throw new Error("The « Chambre » suggestion is not visible");
+
+  // Where the thumb found the chip, without waiting for the rooms to appear.
+  for (let tap = 1; tap <= 4; tap++) {
+    await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+  }
+
+  await expectRooms(page, "R+1", ["Chambre 1", "Chambre 2", "Chambre 3", "Chambre 4"]);
+  // The chip stayed under the thumb, and the field kept the focus (on a phone, the keyboard).
+  expect((await chip.boundingBox())?.y).toBeCloseTo(box.y, 0);
+  await expect(field).toBeFocused();
 });
 
 test("act on a room from its menu: move it to another level, rename it, delete it", async ({
@@ -175,6 +255,45 @@ test("act on a room from its menu: move it to another level, rename it, delete i
     await expectRooms(page, "RDC", ["Cuisine ouverte"]);
     await expectRooms(page, "R+1", ["Chambre 1", "Bureau"]);
   });
+});
+
+test("after a deletion from a menu, the focus goes to the next row, never to the page", async ({
+  page,
+}) => {
+  await createProperty(page, uniqueName("Maison"));
+  await addLevel(page, "RDC");
+  await typeRooms(page, "RDC", ["Entrée", "Cuisine", "Séjour"]);
+  await level(page, "RDC").getByRole("button", { name: "Terminé", exact: true }).tap();
+  await addLevel(page, "R+1");
+  await typeRooms(page, "R+1", ["Bureau"]);
+
+  await roomAction(page, "Cuisine", "Supprimer la pièce");
+  await expect(roomName(page, "Séjour")).toBeFocused(); // the room after it
+  await roomAction(page, "Séjour", "Supprimer la pièce");
+  await expect(roomName(page, "Entrée")).toBeFocused(); // the last one: the room before it
+  await roomAction(page, "Entrée", "Supprimer la pièce");
+  await expect(level(page, "RDC").getByRole("button", { name: "Ajouter une pièce" })).toBeFocused();
+
+  await levelAction(page, "RDC", "Supprimer le niveau");
+  await expect(levelName(page, "R+1")).toBeFocused();
+  await levelAction(page, "R+1", "Supprimer le niveau");
+  await expect(page.getByRole("button", { name: "Ajouter un niveau", exact: true })).toBeFocused();
+});
+
+test("after a rename, the focus is back on the name", async ({ page }) => {
+  await createProperty(page, uniqueName("Maison"));
+  await addLevel(page, "RDC");
+  await typeRooms(page, "RDC", ["Cuisine"]);
+
+  await roomAction(page, "Cuisine", "Renommer");
+  const field = page.getByRole("textbox", { name: "Nom de la pièce", exact: true });
+  await field.fill("Cuisine ouverte");
+  await field.press("Enter");
+  await expect(roomName(page, "Cuisine ouverte")).toBeFocused();
+
+  await levelAction(page, "RDC", "Renommer");
+  await page.getByRole("textbox", { name: "Nom du niveau", exact: true }).press("Escape");
+  await expect(levelName(page, "RDC")).toBeFocused();
 });
 
 test("duplicate a level with its rooms, then undo a copy", async ({ page }) => {

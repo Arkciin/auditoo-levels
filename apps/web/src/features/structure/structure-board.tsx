@@ -20,10 +20,11 @@ import {
   getFirstCollision,
   KeyboardSensor,
   MeasuringStrategy,
+  MouseSensor,
   type Over,
-  PointerSensor,
   pointerWithin,
   rectIntersection,
+  TouchSensor,
   type UniqueIdentifier,
   useSensor,
   useSensors,
@@ -36,7 +37,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { type Level, positionAtIndex, type Space } from "@repo/shared";
+import type { Level, Space } from "@repo/shared";
 import {
   ArrowUpDown,
   Copy,
@@ -69,19 +70,60 @@ import { AddSpace } from "./add-space";
 import { HighlightProvider, HighlightTint, scrollBehavior, useHighlight } from "./highlight";
 import { MoveSpaceDrawer } from "./move-space-drawer";
 import { useDuplicateLevel } from "./use-duplicate-level";
+import { useMoveLevel, useMoveSpace } from "./use-move";
 
 type Containers = Readonly<Record<string, readonly string[]>>;
+
+/**
+ * A finger must rest on a handle this long before its row follows: a thumb scrolling the page
+ * often starts on a handle (they line the right edge, under the thumb), and moves at once.
+ */
+const TOUCH_HOLD_MS = 250;
+/** How far a finger may drift during that hold (px); further, it is a scroll. */
+const TOUCH_HOLD_TOLERANCE_PX = 6;
 
 interface DragData {
   type: "level" | "space";
   name: string;
 }
 
+/** What screen readers call a drag handle, rather than dnd-kit's English "sortable". */
+const ROLE_DESCRIPTION = "poignée de déplacement";
+
 const dragData = (entry: Active | Over | null) => entry?.data.current as DragData | undefined;
 
 function findContainer(containers: Containers, id: string): string | undefined {
   if (id in containers) return id;
   return Object.keys(containers).find((levelId) => containers[levelId]?.includes(id));
+}
+
+/** Where a dragged item would land if dropped now: its index among `count` items. */
+interface Landing {
+  /** The level a room lands in; null for a level, which lands among the levels. */
+  levelId: string | null;
+  index: number;
+  count: number;
+}
+
+/**
+ * Where the room `activeId` would land if dropped on `overId` now, given the room order of the
+ * drag: over another room of its level, it takes that room's place; over itself or its level
+ * (or nothing), it stays where it is. What the drop does, and what is announced.
+ */
+function roomLanding(containers: Containers, activeId: string, overId: string | null): Landing {
+  const levelId = findContainer(containers, activeId) ?? null;
+  let ids = levelId === null ? [] : (containers[levelId] ?? []);
+  const from = ids.indexOf(activeId);
+  const to = overId === null ? -1 : ids.indexOf(overId);
+  if (from >= 0 && to >= 0 && from !== to) ids = arrayMove([...ids], from, to);
+  return { levelId, index: ids.indexOf(activeId), count: ids.length };
+}
+
+/** Where the level `activeId` would land if dropped on `overId` now: in the place of `overId`. */
+function levelLanding(levelIds: readonly string[], activeId: string, overId: string | null) {
+  const from = levelIds.indexOf(activeId);
+  const to = overId === null ? -1 : levelIds.indexOf(overId);
+  return { levelId: null, index: to >= 0 ? to : from, count: levelIds.length } satisfies Landing;
 }
 
 export function StructureBoard({
@@ -96,9 +138,13 @@ export function StructureBoard({
   autoAddLevelId: string | null;
   onAutoAddHandled: () => void;
 }) {
-  const safeMutate = useSafeMutate();
+  const moveLevel = useMoveLevel(propertyId);
+  const moveSpace = useMoveSpace(propertyId);
   const [active, setActive] = useState<{ id: string; type: DragData["type"] } | null>(null);
   const [dragContainers, setDragContainers] = useState<Containers | null>(null);
+  // Also kept in a ref, set by the drag handlers: dnd-kit calls the announcements right after
+  // them, before React renders, and they must tell where the room is now.
+  const latestDragContainers = useRef<Containers | null>(null);
   const lastOverId = useRef<UniqueIdentifier | null>(null);
   const movedToNewContainer = useRef(false);
   // One « Déplacer vers… » sheet for every room; the room stays set while the sheet closes.
@@ -127,8 +173,13 @@ export function StructureBoard({
   });
 
   const sensors = useSensors(
-    // Handles have `touch-action: none`, so a few pixels are enough to tell a drag from a tap.
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    // A mouse never scrolls by dragging: a few pixels tell a drag from a click.
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    // A finger drags after a short hold, still; until then the browser may scroll the page, as
+    // handles leave it vertical panning (`touch-action: manipulation`).
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: TOUCH_HOLD_MS, tolerance: TOUCH_HOLD_TOLERANCE_PX },
+    }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
@@ -167,88 +218,109 @@ export function StructureBoard({
     [active, containers],
   );
 
+  function updateDragContainers(next: Containers | null) {
+    latestDragContainers.current = next;
+    setDragContainers(next);
+  }
+
   function handleDragStart({ active: dragged }: DragStartEvent) {
     const data = dragData(dragged);
     if (!data) return;
     setActive({ id: String(dragged.id), type: data.type });
-    if (data.type === "space") setDragContainers(committed);
-    haptic(8);
+    if (data.type === "space") updateDragContainers(committed);
+    // With the lifted copy (DragPreview), what tells a finger that the hold is over.
+    haptic(10);
   }
 
   function handleDragOver({ active: dragged, over }: DragOverEvent) {
     if (!over || dragData(dragged)?.type !== "space") return;
     const activeId = String(dragged.id);
     const overId = String(over.id);
-    setDragContainers((previous) => {
-      const current = previous ?? committed;
-      const from = findContainer(current, activeId);
-      const to = findContainer(current, overId);
-      if (!from || !to || from === to) return previous;
-      const target = current[to] ?? [];
-      let index = target.length; // dropped on the level itself: at the end
-      if (!(overId in current)) {
-        const overIndex = target.indexOf(overId);
-        const translated = dragged.rect.current.translated;
-        const below = translated !== null && translated.top > over.rect.top + over.rect.height / 2;
-        index = overIndex >= 0 ? overIndex + (below ? 1 : 0) : target.length;
-      }
-      movedToNewContainer.current = true;
-      return {
-        ...current,
-        [from]: (current[from] ?? []).filter((id) => id !== activeId),
-        [to]: [...target.slice(0, index), activeId, ...target.slice(index)],
-      };
+    const current = latestDragContainers.current ?? committed;
+    const from = findContainer(current, activeId);
+    const to = findContainer(current, overId);
+    if (!from || !to || from === to) return;
+    const target = current[to] ?? [];
+    let index = target.length; // dropped on the level itself: at the end
+    if (!(overId in current)) {
+      const overIndex = target.indexOf(overId);
+      const translated = dragged.rect.current.translated;
+      const below = translated !== null && translated.top > over.rect.top + over.rect.height / 2;
+      index = overIndex >= 0 ? overIndex + (below ? 1 : 0) : target.length;
+    }
+    movedToNewContainer.current = true;
+    updateDragContainers({
+      ...current,
+      [from]: (current[from] ?? []).filter((id) => id !== activeId),
+      [to]: [...target.slice(0, index), activeId, ...target.slice(index)],
     });
   }
 
   async function handleDragEnd({ active: dragged, over }: DragEndEvent) {
     const activeId = String(dragged.id);
+    const overId = over ? String(over.id) : null;
     const type = dragData(dragged)?.type;
     setActive(null);
 
     if (type === "level") {
-      const from = levelIds.indexOf(activeId);
-      const to = over ? levelIds.indexOf(String(over.id)) : -1;
-      if (from >= 0 && to >= 0 && from !== to) {
-        const siblings = arrayMove(levels, from, to).filter((level) => level.id !== activeId);
-        if (
-          await safeMutate("moveLevel", { id: activeId, position: positionAtIndex(siblings, to) })
-        )
-          haptic(8);
+      const level = levels.find((candidate) => candidate.id === activeId);
+      const { index } = levelLanding(levelIds, activeId, overId);
+      if (level && overId !== null && index !== levelIds.indexOf(activeId)) {
+        await moveLevel(level, index);
       }
       return;
     }
 
-    const current = dragContainers ?? committed;
-    const container = findContainer(current, activeId);
+    const { levelId, index } = roomLanding(
+      latestDragContainers.current ?? committed,
+      activeId,
+      overId,
+    );
     const space = spacesById.get(activeId);
-    if (over && container && space) {
-      let ids = current[container] ?? [];
-      const from = ids.indexOf(activeId);
-      const to = ids.indexOf(String(over.id));
-      if (to >= 0 && from !== to) ids = arrayMove([...ids], from, to);
-      const index = ids.indexOf(activeId);
+    const target = levels.find((level) => level.id === levelId);
+    if (overId !== null && space && target) {
       const moved =
-        space.levelId !== container || committed[container]?.indexOf(activeId) !== index;
-      if (moved) {
-        // Neighbours keep their committed relative order, so their positions are sorted.
-        const siblings = ids
-          .filter((id) => id !== activeId)
-          .map((id) => spacesById.get(id))
-          .filter((s): s is Space => s !== undefined);
-        const position = positionAtIndex(siblings, index);
-        if (await safeMutate("moveSpace", { id: activeId, levelId: container, position }))
-          haptic(8);
-      }
+        space.levelId !== target.id || committed[target.id]?.indexOf(activeId) !== index;
+      if (moved) await moveSpace(space, target, index);
     }
     // Cleared after the mutation so the room does not jump back for a frame.
-    setDragContainers(null);
+    updateDragContainers(null);
   }
 
   function handleDragCancel() {
     setActive(null);
-    setDragContainers(null);
+    updateDragContainers(null);
   }
+
+  // In French, and where the item would land (« position 2 sur 4 dans « R+1 » »): dnd-kit's
+  // default names the item under the pointer, which, right after a room changes level, is the
+  // room itself (« « Bureau » près de « Bureau » »).
+  const announcements = useMemo<Announcements>(() => {
+    const where = (dragged: Active, over: Over | null): string => {
+      const activeId = String(dragged.id);
+      const overId = over ? String(over.id) : null;
+      if (dragData(dragged)?.type === "level") {
+        const { index, count } = levelLanding(levelIds, activeId, overId);
+        return `position ${index + 1} sur ${count} parmi les niveaux`;
+      }
+      const containers = latestDragContainers.current ?? committed;
+      const { levelId, index, count } = roomLanding(containers, activeId, overId);
+      const level = levels.find((candidate) => candidate.id === levelId);
+      return `position ${index + 1} sur ${count} dans ${quote(level?.name ?? "")}`;
+    };
+    return {
+      onDragStart: ({ active: dragged }) => `${nameOf(dragged)} saisi, ${where(dragged, null)}.`,
+      onDragOver: ({ active: dragged, over }) =>
+        over
+          ? `${nameOf(dragged)}, ${where(dragged, over)}.`
+          : `${nameOf(dragged)} hors de la liste.`,
+      onDragEnd: ({ active: dragged, over }) =>
+        over
+          ? `${nameOf(dragged)} déposé, ${where(dragged, over)}.`
+          : `${nameOf(dragged)} relâché.`,
+      onDragCancel: ({ active: dragged }) => `Déplacement de ${nameOf(dragged)} annulé.`,
+    };
+  }, [levels, levelIds, committed]);
 
   return (
     <HighlightProvider>
@@ -308,6 +380,28 @@ function withRooms(count: number): string {
   return count === 1 ? " avec sa pièce" : ` avec ses ${count} pièces`;
 }
 
+/** The name of a level or a room: a button that turns into a field (EditableText). */
+const NAME_SELECTOR = '[data-slot="editable-text"]';
+
+/** A level's room entry (AddSpace): its « Ajouter une pièce » button, or its field once open. */
+function roomEntry(level: Element | null, part: "button" | "field"): HTMLElement | null {
+  return level?.querySelector<HTMLElement>(`[data-add-space="${part}"]`) ?? null;
+}
+
+/**
+ * Where the focus goes once `row` (a level's section, a room's item) is deleted from its menu,
+ * found while the row is still on the page: the name of the row after it, else of the one before,
+ * else `fallback`. Never the page body, where keyboard and screen reader users lose their place.
+ */
+function focusAfterDeleting(row: Element | null, fallback: () => HTMLElement | null): () => void {
+  const next = row?.nextElementSibling?.querySelector<HTMLElement>(NAME_SELECTOR) ?? null;
+  const previous = row?.previousElementSibling?.querySelector<HTMLElement>(NAME_SELECTOR) ?? null;
+  return () => {
+    const target = [next, previous].find((name) => name?.isConnected) ?? fallback();
+    target?.focus();
+  };
+}
+
 function LevelSection({
   propertyId,
   level,
@@ -337,6 +431,7 @@ function LevelSection({
   } = useSortable({
     id: level.id,
     data: { type: "level", name: level.name } satisfies DragData,
+    attributes: { roleDescription: ROLE_DESCRIPTION },
   });
   const safeMutate = useSafeMutate();
   const duplicateLevel = useDuplicateLevel(propertyId);
@@ -344,7 +439,8 @@ function LevelSection({
   const [renaming, setRenaming] = useState(false);
   const [adding, setAdding] = useState(false);
   const sectionRef = useRef<HTMLElement | null>(null);
-  const focusRenameInput = useRef(false);
+  /** What to do once the menu has closed, instead of giving the focus back to its button. */
+  const afterMenu = useRef<(() => void) | null>(null);
   const spaces = useMemo(
     () => spaceIds.map((id) => spacesById.get(id)).filter((s): s is Space => s !== undefined),
     [spaceIds, spacesById],
@@ -391,7 +487,12 @@ function LevelSection({
       data-highlight-id={level.id}
       className={cn("relative scroll-mt-6 pt-5", isDragging && "opacity-40")}
     >
-      <SwipeToDelete onDelete={() => void remove()} disabled={renaming}>
+      {/* A level goes with its rooms: the swipe only reveals a button, deleting takes a tap. */}
+      <SwipeToDelete
+        onDelete={() => void remove()}
+        confirmLabel={`Supprimer le niveau ${quote(level.name)}`}
+        disabled={renaming}
+      >
         {/* The floor line: the datum marker's apex rests on it, as on a building section. */}
         <div className="flex h-12 items-end gap-2 border-b-[1.5px] border-foreground pr-1 pl-4">
           <DatumMarker className="mb-px" />
@@ -427,21 +528,29 @@ function LevelSection({
             <DropdownMenuContent
               align="end"
               onCloseAutoFocus={(event) => {
-                // Let the rename field keep the focus it just received.
-                if (focusRenameInput.current) event.preventDefault();
-                focusRenameInput.current = false;
+                const then = afterMenu.current;
+                afterMenu.current = null;
+                if (!then) return;
+                event.preventDefault();
+                then();
               }}
             >
               <DropdownMenuItem
                 onSelect={() => {
-                  focusRenameInput.current = true;
+                  afterMenu.current = () => {}; // the rename field has taken the focus
                   setRenaming(true);
                 }}
               >
                 <Pencil />
                 Renommer
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setAdding(true)}>
+              <DropdownMenuItem
+                onSelect={() => {
+                  // The room field, which the menu would take the focus from as it closes.
+                  afterMenu.current = () => roomEntry(sectionRef.current, "field")?.focus();
+                  setAdding(true);
+                }}
+              >
                 <Plus />
                 Ajouter une pièce
               </DropdownMenuItem>
@@ -450,7 +559,16 @@ function LevelSection({
                 Dupliquer le niveau
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem variant="destructive" onSelect={() => void remove()}>
+              <DropdownMenuItem
+                variant="destructive"
+                onSelect={() => {
+                  // No level left: the screen's « Ajouter un niveau ».
+                  afterMenu.current = focusAfterDeleting(sectionRef.current, () =>
+                    document.querySelector<HTMLElement>('[data-slot="action-bar"] button'),
+                  );
+                  void remove();
+                }}
+              >
                 <Trash />
                 Supprimer le niveau
               </DropdownMenuItem>
@@ -509,11 +627,13 @@ function SpaceRow({
   } = useSortable({
     id: space.id,
     data: { type: "space", name: space.name } satisfies DragData,
+    attributes: { roleDescription: ROLE_DESCRIPTION },
   });
   const safeMutate = useSafeMutate();
   const [renaming, setRenaming] = useState(false);
-  /** What to do once the menu has closed and let go of the focus. */
-  const afterMenu = useRef<"rename" | "move" | null>(null);
+  const rowRef = useRef<HTMLLIElement | null>(null);
+  /** What to do once the menu has closed and let go of the focus, instead of taking it back. */
+  const afterMenu = useRef<(() => void) | null>(null);
 
   async function rename(name: string) {
     if (!(await safeMutate("renameSpace", { id: space.id, name }))) throw new Error("not saved");
@@ -528,7 +648,10 @@ function SpaceRow({
 
   return (
     <li
-      ref={setNodeRef}
+      ref={(node) => {
+        setNodeRef(node);
+        rowRef.current = node;
+      }}
       style={{ transform: CSS.Translate.toString(transform), transition }}
       data-highlight-id={space.id}
       className={cn("relative", isDragging && "z-10 opacity-40")}
@@ -536,13 +659,15 @@ function SpaceRow({
       <SwipeToDelete onDelete={() => void remove()} disabled={renaming}>
         {/* gap-2, as in the level header: the ⋮ buttons line up in one column. */}
         <div className="flex h-12 items-center gap-2 border-b border-rule pr-1 pl-10">
+          {/* The focus ring drawn inside, as the row clips what overflows it (SwipeToDelete), and
+              clear of the text: the button reaches into the gutter, the text stays aligned. */}
           <EditableText
             value={space.name}
             label="Nom de la pièce"
             editing={renaming}
             onEditingChange={setRenaming}
             onSave={rename}
-            className="h-full flex-1"
+            className="-ml-2 h-full flex-1 pl-2 -outline-offset-2"
             inputClassName="h-9"
           />
           {/* Every action without a gesture (keyboard, screen reader, one thumb): the menu. */}
@@ -562,19 +687,19 @@ function SpaceRow({
               <DropdownMenuContent
                 align="end"
                 onCloseAutoFocus={(event) => {
-                  // The rename field or the sheet takes the focus, not the menu button. The sheet
-                  // only opens now: a dialog opened while the menu still holds the focus can lose
-                  // it, and close at once.
-                  const next = afterMenu.current;
+                  // The rename field, the sheet or another row takes the focus, not the menu
+                  // button. The sheet only opens now: a dialog opened while the menu still holds
+                  // the focus can lose it, and close at once.
+                  const then = afterMenu.current;
                   afterMenu.current = null;
-                  if (next === null) return;
+                  if (!then) return;
                   event.preventDefault();
-                  if (next === "move") onMove?.(space);
+                  then();
                 }}
               >
                 <DropdownMenuItem
                   onSelect={() => {
-                    afterMenu.current = "rename";
+                    afterMenu.current = () => {}; // the rename field has taken the focus
                     setRenaming(true);
                   }}
                 >
@@ -584,14 +709,29 @@ function SpaceRow({
                 <DropdownMenuItem
                   disabled={onMove === undefined}
                   onSelect={() => {
-                    afterMenu.current = "move";
+                    afterMenu.current = () => onMove?.(space);
                   }}
                 >
                   <ArrowUpDown />
                   Déplacer vers…
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem variant="destructive" onSelect={() => void remove()}>
+                <DropdownMenuItem
+                  variant="destructive"
+                  onSelect={() => {
+                    // No room left: « Ajouter une pièce », or the level's name while the room
+                    // field is open (focusing the field would pop the keyboard up).
+                    const level = rowRef.current?.closest("section") ?? null;
+                    afterMenu.current = focusAfterDeleting(
+                      rowRef.current,
+                      () =>
+                        roomEntry(level, "button") ??
+                        level?.querySelector<HTMLElement>(NAME_SELECTOR) ??
+                        null,
+                    );
+                    void remove();
+                  }}
+                >
                   <Trash />
                   Supprimer la pièce
                 </DropdownMenuItem>
@@ -611,7 +751,10 @@ function SpaceRow({
   );
 }
 
-/** The only place a drag can start: keeps taps (rename) and swipes (delete) unambiguous. */
+/**
+ * The only place a drag can start: keeps taps (rename) and swipes (delete) unambiguous. A finger
+ * holds it still for a moment first (see the sensors): a flick that starts on it scrolls the page.
+ */
 function DragHandle({ label, className, ...props }: ComponentProps<"button"> & { label: string }) {
   return (
     <button
@@ -619,7 +762,7 @@ function DragHandle({ label, className, ...props }: ComponentProps<"button"> & {
       aria-label={label}
       data-no-swipe
       className={cn(
-        "flex size-11 shrink-0 cursor-grab touch-none items-center justify-center rounded-lg text-muted-foreground active:cursor-grabbing",
+        "flex size-11 shrink-0 cursor-grab touch-manipulation items-center justify-center rounded-lg text-muted-foreground select-none active:cursor-grabbing active:bg-muted",
         className,
       )}
       {...props}
@@ -628,6 +771,13 @@ function DragHandle({ label, className, ...props }: ComponentProps<"button"> & {
     </button>
   );
 }
+
+/**
+ * The copy in the hand rises off the page as the drag starts, slightly larger and shadowed: on a
+ * touch screen, the sign (with a vibration) that the hold is over and the row now follows.
+ * (`scale` and the entrance's `transform` multiply: it grows from its size on the page.)
+ */
+const LIFTED = "cursor-grabbing shadow-drag scale-102 animate-in zoom-in-98";
 
 function DragPreview({
   active,
@@ -644,7 +794,12 @@ function DragPreview({
     const level = levels.find((candidate) => candidate.id === active.id);
     if (!level) return null;
     return (
-      <div className="flex h-12 cursor-grabbing items-end gap-2 rounded-lg border-b-[1.5px] border-foreground bg-card pr-1 pl-4 shadow-drag">
+      <div
+        className={cn(
+          "flex h-12 items-end gap-2 rounded-lg border-b-[1.5px] border-foreground bg-card pr-1 pl-4",
+          LIFTED,
+        )}
+      >
         <DatumMarker className="mb-px" />
         <span className="flex-1 truncate pb-1.5 text-lg font-bold">{level.name}</span>
         <span className="pb-2 text-sm text-muted-foreground tabular-nums">
@@ -657,7 +812,7 @@ function DragPreview({
   const space = spacesById.get(active.id);
   if (!space) return null;
   return (
-    <div className="flex h-12 cursor-grabbing items-center gap-2 rounded-lg bg-card pr-1 pl-10 shadow-drag">
+    <div className={cn("flex h-12 items-center gap-2 rounded-lg bg-card pr-1 pl-10", LIFTED)}>
       <span className="flex-1 truncate">{space.name}</span>
       <PreviewButtons />
     </div>
@@ -675,15 +830,6 @@ function PreviewButtons() {
 }
 
 const nameOf = (entry: Active | Over | null) => quote(dragData(entry)?.name ?? "l’élément");
-
-const announcements: Announcements = {
-  onDragStart: ({ active }) => `${nameOf(active)} saisi.`,
-  onDragOver: ({ active, over }) =>
-    over ? `${nameOf(active)} près de ${nameOf(over)}.` : `${nameOf(active)} hors de la liste.`,
-  onDragEnd: ({ active, over }) =>
-    over ? `${nameOf(active)} déposé près de ${nameOf(over)}.` : `${nameOf(active)} relâché.`,
-  onDragCancel: ({ active }) => `Déplacement de ${nameOf(active)} annulé.`,
-};
 
 const screenReaderInstructions = {
   draggable:
