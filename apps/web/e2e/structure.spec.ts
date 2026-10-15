@@ -79,9 +79,11 @@ test("a double tap on a level suggestion adds one level", async ({ page }) => {
   const box = await suggestion.boundingBox();
   if (!box) throw new Error("The « R+1 » suggestion is not visible");
 
-  // A second tap as the sheet slides away, where R+2 is now suggested.
+  // A second tap as the sheet slides away, where « R+1 » still is: the level just added does not
+  // turn it into the next floor, « R+2 », under the finger.
   await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
-  await expect(sheet.getByRole("button", { name: "R+2", exact: true })).toBeVisible();
+  await expect(sheet).toHaveAttribute("data-state", "closed");
+  await expect(sheet.getByRole("button", { name: "R+2", exact: true })).toHaveCount(0);
   await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
 
   await expect(sheet).toBeHidden();
