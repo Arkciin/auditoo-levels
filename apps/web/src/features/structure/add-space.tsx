@@ -153,6 +153,7 @@ export function AddSpace({
     const focused = document.activeElement;
     refocus.current =
       focused === null || focused === document.body || !!entryRef.current?.contains(focused);
+    anchor.current = null; // no chips left to keep in place
     onOpenChange(false);
   }
 
