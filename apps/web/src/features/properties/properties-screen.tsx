@@ -1,4 +1,4 @@
-import { newId, type Property } from "@repo/shared";
+import { NAME_MAX_LENGTH, newId, type Property } from "@repo/shared";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
   ArchiveRestore,
@@ -278,7 +278,7 @@ function NewPropertyDrawer({
               placeholder="12 rue des Lilas, Lyon"
               autoComplete="off"
               enterKeyHint="done"
-              maxLength={80}
+              maxLength={NAME_MAX_LENGTH}
               required
               autoFocus
             />
