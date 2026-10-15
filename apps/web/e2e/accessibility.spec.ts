@@ -5,9 +5,12 @@ import {
   createProperty,
   expect,
   expectSynced,
+  levelAction,
   offlineBanner,
   propertyRow,
+  reloadOnceSynced,
   room,
+  roomAction,
   roomName,
   swipeLeft,
   syncPill,
@@ -138,6 +141,46 @@ test("sync status: the details sheet, offline banner and pending changes", async
   await details.focus();
   await page.keyboard.press("PageDown");
   await expect.poll(scrolled).toBeGreaterThan(0);
+});
+
+test("deleted items: the « Éléments supprimés » and « Logements supprimés » sheets", async ({
+  page,
+}) => {
+  await createProperty(page, uniqueName("Maison"));
+  await addLevel(page, "RDC");
+  await typeRooms(page, "RDC", ["Entrée", "Cuisine"]);
+  await addLevel(page, "R+1");
+
+  const items = page.getByRole("dialog", { name: "Éléments supprimés" });
+  const openItems = async () => {
+    await page.getByRole("button", { name: "Actions du logement", exact: true }).tap();
+    await page.getByRole("menuitem", { name: "Éléments supprimés", exact: true }).tap();
+    await expect(items).toBeVisible();
+  };
+  await openItems();
+  await expect(items.getByText("Aucun élément supprimé", { exact: true })).toBeVisible();
+  await expectAccessible(page, "« Éléments supprimés » sheet, empty");
+  await page.keyboard.press("Escape");
+  await expect(items).toBeHidden();
+
+  await roomAction(page, "Cuisine", "Supprimer la pièce");
+  await levelAction(page, "R+1", "Supprimer le niveau");
+  await reloadOnceSynced(page); // without the undo toasts, which would cover the sheet
+  await openItems();
+  await expect(items.getByRole("region", { name: "Pièces" })).toBeVisible();
+  await expectAccessible(page, "« Éléments supprimés » sheet");
+  await page.keyboard.press("Escape");
+  await expect(items).toBeHidden();
+
+  await page.getByRole("button", { name: "Actions du logement", exact: true }).tap();
+  await page.getByRole("menuitem", { name: "Supprimer le logement", exact: true }).tap();
+  await expect(page).toHaveURL("/");
+  await reloadOnceSynced(page);
+  await page.getByRole("button", { name: "Plus d’actions", exact: true }).tap();
+  await page.getByRole("menuitem", { name: "Logements supprimés", exact: true }).tap();
+  const properties = page.getByRole("dialog", { name: "Logements supprimés" });
+  await expect(properties.getByRole("listitem").first()).toBeVisible();
+  await expectAccessible(page, "« Logements supprimés » sheet");
 });
 
 test("an unknown address", async ({ page }) => {

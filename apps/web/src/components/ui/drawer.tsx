@@ -25,6 +25,17 @@ function useOpenedOnce(open: boolean): boolean {
   return opened || open;
 }
 
+/**
+ * `value` while the sheet is open, and as it last was then while it closes: an action that closes
+ * the sheet and changes its content (a restored item leaving a list) must not reshape it as it
+ * slides out.
+ */
+function useHeldWhileClosing<T>(value: T, open: boolean): T {
+  const [held, setHeld] = useState(value);
+  if (open && held !== value) setHeld(value);
+  return open ? value : held;
+}
+
 function DrawerTrigger({ ...props }: React.ComponentProps<typeof DrawerPrimitive.Trigger>) {
   return <DrawerPrimitive.Trigger data-slot="drawer-trigger" {...props} />;
 }
@@ -141,5 +152,6 @@ export {
   DrawerPortal,
   DrawerTitle,
   DrawerTrigger,
+  useHeldWhileClosing,
   useOpenedOnce,
 };

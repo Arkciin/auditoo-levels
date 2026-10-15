@@ -1,6 +1,6 @@
 import type { Property } from "@repo/shared";
 import { Link, useCanGoBack, useRouter } from "@tanstack/react-router";
-import { ArrowLeft, EllipsisVertical, Pencil, Plus, Trash } from "lucide-react";
+import { ArchiveRestore, ArrowLeft, EllipsisVertical, Pencil, Plus, Trash } from "lucide-react";
 import { type MouseEvent, useCallback, useRef, useState } from "react";
 
 import { ActionBar, AppHeader, ScreenBody } from "@/components/app-layout";
@@ -19,6 +19,7 @@ import { quote, toastUndo, useSafeMutate } from "@/features/use-safe-mutate";
 import { levelsAndRooms, suggestLevelNames } from "@/lib/suggestions";
 import { selectProperty, selectStructure, useSyncStatus, useView } from "@/sync";
 import { AddLevelDrawer } from "./add-level-drawer";
+import { DeletedItemsSheet } from "./deleted-items-sheet";
 import { StructureBoard } from "./structure-board";
 import { useAddLevel } from "./use-add-level";
 
@@ -38,9 +39,12 @@ export function StructureScreen({ propertyId }: { propertyId: string }) {
    * its place, rather than « Logement introuvable » flashing in between.
    */
   const [leaving, setLeaving] = useState<Property | null>(null);
-  const focusRenameInput = useRef(false);
+  const [deletedSheet, setDeletedSheet] = useState(false);
+  /** What takes over once the menu has closed: the rename field, or the deleted items' sheet. */
+  const afterMenu = useRef<"rename" | "deleted" | null>(null);
   const clearAutoAdd = useCallback(() => setAutoAddLevelId(null), []);
   const addLevelMounted = useOpenedOnce(addingLevel);
+  const deletedSheetMounted = useOpenedOnce(deletedSheet);
   const property = liveProperty ?? leaving;
 
   if (!property) {
@@ -104,18 +108,31 @@ export function StructureScreen({ propertyId }: { propertyId: string }) {
             <DropdownMenuContent
               align="end"
               onCloseAutoFocus={(event) => {
-                if (focusRenameInput.current) event.preventDefault();
-                focusRenameInput.current = false;
+                // The rename field keeps the focus it just received; the sheet only opens now
+                // that the menu has let go of the focus (see SpaceRow).
+                const next = afterMenu.current;
+                afterMenu.current = null;
+                if (next === null) return;
+                event.preventDefault();
+                if (next === "deleted") setDeletedSheet(true);
               }}
             >
               <DropdownMenuItem
                 onSelect={() => {
-                  focusRenameInput.current = true;
+                  afterMenu.current = "rename";
                   setRenaming(true);
                 }}
               >
                 <Pencil />
                 Renommer le logement
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => {
+                  afterMenu.current = "deleted";
+                }}
+              >
+                <ArchiveRestore />
+                Éléments supprimés
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem variant="destructive" onSelect={() => void remove(property)}>
@@ -156,6 +173,13 @@ export function StructureScreen({ propertyId }: { propertyId: string }) {
           open={addingLevel}
           onOpenChange={setAddingLevel}
           onCreated={setAutoAddLevelId}
+        />
+      ) : null}
+      {deletedSheetMounted ? (
+        <DeletedItemsSheet
+          propertyId={propertyId}
+          open={deletedSheet}
+          onOpenChange={setDeletedSheet}
         />
       ) : null}
     </>
