@@ -12,8 +12,16 @@ export const idSchema = z.uuid();
 const CONTROL_CHARACTER = /\p{Cc}/u;
 
 /**
+ * Half of a UTF-16 surrogate pair on its own: broken text, such as an emoji cut in two by a paste
+ * or a truncation. (With the `u` flag a whole pair is one code point, which `\p{Cs}` does not
+ * match.) UTF-8 cannot encode it: the server's database driver writes U+FFFD instead, so the
+ * server's row would differ from what the device computed.
+ */
+const LONE_SURROGATE = /\p{Cs}/u;
+
+/**
  * A name typed by a user. Surrounding whitespace (line breaks included) is trimmed; control
- * characters left inside, typically from a paste, are refused.
+ * characters left inside, typically from a paste, are refused, and so is broken text.
  */
 export const nameSchema = z
   .string()
@@ -23,6 +31,10 @@ export const nameSchema = z
   .refine(
     (name) => !CONTROL_CHARACTER.test(name),
     "Le nom contient des caractères invisibles non autorisés (retour à la ligne, tabulation…)",
+  )
+  .refine(
+    (name) => !LONE_SURROGATE.test(name),
+    "Le nom contient un caractère mal formé (un emoji coupé, par exemple)",
   );
 
 /**

@@ -140,9 +140,10 @@ describe("API", () => {
 
   it("accepts the largest push a device can send", async () => {
     // Refused for its size, a push would be retried as it is, forever: the device's queue would
-    // be blocked. The largest mutation is a level copy with the most rooms, and lone surrogates
-    // are the costliest characters a name can hold (JSON escapes each one in six bytes).
-    const name = "\ud800".repeat(NAME_MAX_LENGTH);
+    // be blocked. The largest mutation is a level copy with the most rooms, and characters of
+    // three UTF-8 bytes per UTF-16 unit are the costliest a name can hold (a lone surrogate, which
+    // JSON escapes in six, is refused; a whole emoji is two units in four bytes).
+    const name = "€".repeat(NAME_MAX_LENGTH);
     const position = `a0${"z".repeat(126)}`; // the longest valid key
     const id = (n: number) => `0199f0a0-0000-7000-8000-${n.toString(16).padStart(12, "0")}`;
     const largest = Array.from({ length: MAX_MUTATIONS_PER_PUSH }, (_, i) =>

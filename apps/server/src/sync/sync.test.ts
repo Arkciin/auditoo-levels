@@ -236,17 +236,20 @@ describe("push and pull", () => {
       // PostgreSQL text cannot hold NUL: the schema refuses it before it reaches the database.
       { id: 3, name: "renameProperty", args: { id: PROPERTY, name: "Ma\u0000ison" }, timestamp: 1 },
       { id: 4, name: "paintWalls", args: { id: PROPERTY }, timestamp: 1_000 },
+      // Nor half an emoji, which UTF-8 cannot encode: the driver would store U+FFFD instead, and
+      // the server's row would differ from the device's.
+      { id: 5, name: "renameProperty", args: { id: PROPERTY, name: "Ma\ud83dison" }, timestamp: 1 },
     ];
     const result = await push({
       clientId: DEVICE_A,
-      mutations: [createProperty, ...invalid, { ...createLevel, id: 5 }],
+      mutations: [createProperty, ...invalid, { ...createLevel, id: 6 }],
     });
 
     expect(result).toEqual({
-      lastMutationId: 5,
+      lastMutationId: 6,
       version: 2,
       changed: true,
-      rejected: [2, 3, 4].map((id) => ({ id, reason: "invalid" })),
+      rejected: [2, 3, 4, 5].map((id) => ({ id, reason: "invalid" })),
     });
     const { changes } = await pull(DEVICE_A, 0);
     expect(changes.properties.map((property) => property.name)).toEqual(["12 rue des Lilas"]);

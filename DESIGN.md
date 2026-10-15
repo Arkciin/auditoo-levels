@@ -102,7 +102,7 @@ SQL: `apps/server/src/db/migrations.ts`; shapes: `packages/shared/src/schemas.ts
 | **Soft deletes** (`deletedAt`) | A delete is a row change like any other, so it syncs through the same cursor, and undo is just a `restore*` mutation. Deleting a level hides its rooms without touching them; restoring it brings them all back. |
 | **Epoch-ms `bigint` timestamps, taken from the mutation** | Mutators are deterministic, so server rows are identical to what the device computed optimistically and the next pull changes nothing on screen (asserted in `apps/server/src/sync/sync.test.ts`). The price: `createdAt` and `deletedAt` come from device clocks, which only drive display order. |
 | **`position text COLLATE "C"`** | Fractional keys compare by code unit (see [Ordering](#ordering-with-fractional-indexes)). |
-| **Names: 1 to 80 characters, no control characters** | Validated on input by `nameSchema` (French messages); the length is also a SQL `CHECK`. Rows read back use a looser schema: if input rules tighten later, a row stored under the old rules must never make a pull fail and block a device. |
+| **Names: 1 to 80 characters, no control characters, no half emoji** | Validated on input by `nameSchema` (French messages); the length is also a SQL `CHECK`. A lone UTF-16 surrogate has no UTF-8 form: the database would store U+FFFD, and the server's row would differ from the device's. Rows read back use a looser schema: if input rules tighten later, a row stored under the old rules must never make a pull fail and block a device. |
 | **Foreign keys** `levels → properties`, `spaces → levels` | The database guards the tree, even against a buggy mutator. |
 
 ## Sync strategy
@@ -166,7 +166,7 @@ The device sends its outbox oldest first, in pushes of at most 100 mutations and
 (`MAX_PUSH_BYTES`), an eighth of the 8 MiB the server accepts: a push refused for its size would be
 retried as it is, forever. `mutate()` refuses a mutation that would not fit a push of its own, so
 no future mutation can block a queue; today's largest, a 100-room copy with the costliest names,
-takes 69 KB (`apps/server/src/app.test.ts`). `apps/server/src/sync/push.ts` gives **each mutation
+takes 44 KB (`apps/server/src/app.test.ts`). `apps/server/src/sync/push.ts` gives **each mutation
 its own transaction**:
 
 1. `SELECT version, epoch FROM server_meta … FOR UPDATE`: take the version lock, check the epoch.
