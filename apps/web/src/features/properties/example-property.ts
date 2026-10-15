@@ -11,7 +11,7 @@ const EXAMPLE: readonly (readonly [level: string, spaces: readonly string[]])[] 
 
 /**
  * Creates a furnished example house, handy for a demo. It goes through the regular mutations,
- * so it is queued, synced and undoable like anything a user types.
+ * so it is queued and synced like anything a user types, and deleted like any other logement.
  */
 export async function createExampleProperty(mutate: SyncClient["mutate"]): Promise<string> {
   const propertyId = newId();

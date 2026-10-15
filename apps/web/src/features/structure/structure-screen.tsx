@@ -24,7 +24,7 @@ import {
 import { quote, toastUndo, useSafeMutate } from "@/features/use-safe-mutate";
 import { previousEntryInDocument } from "@/lib/document-history";
 import { levelsAndRooms, suggestLevelNames } from "@/lib/suggestions";
-import { selectProperty, selectStructure, useSyncStatus, useView } from "@/sync";
+import { selectProperty, selectStructure, useSyncClient, useSyncStatus, useView } from "@/sync";
 import { AddLevelDrawer } from "./add-level-drawer";
 import { DeletedItemsSheet } from "./deleted-items-sheet";
 import { StructureBoard } from "./structure-board";
@@ -36,6 +36,7 @@ export function StructureScreen({ propertyId }: { propertyId: string }) {
   const structure = useView((view) => selectStructure(view, propertyId));
   const status = useSyncStatus();
   const leaveToList = useLeaveToList();
+  const client = useSyncClient();
   const safeMutate = useSafeMutate();
   const addLevel = useAddLevel(propertyId);
   const [addingLevel, setAddingLevel] = useState(false);
@@ -158,6 +159,7 @@ export function StructureScreen({ propertyId }: { propertyId: string }) {
               editing={renaming}
               onEditingChange={setRenaming}
               onSave={rename}
+              canSaveOnUnmount={() => !!selectProperty(client.getState().view, property.id)}
               // `text-clip` replaces the truncation of EditableText's button: the name wraps.
               className="block min-h-11 w-full text-clip whitespace-normal break-words"
               inputClassName="h-12 text-2xl font-bold"

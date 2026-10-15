@@ -224,6 +224,10 @@ export function plural(count: number, singular: string, pluralForm: string): str
  */
 export function levelsAndRooms(levelCount: number, roomCount: number): string {
   if (levelCount === 0) return "Aucun niveau";
-  const rooms = roomCount === 0 ? "aucune pièce" : plural(roomCount, "pièce", "pièces");
-  return `${plural(levelCount, "niveau", "niveaux")}, ${rooms}`;
+  return `${plural(levelCount, "niveau", "niveaux")}, ${howManyRooms(roomCount)}`;
+}
+
+/** « aucune pièce », « 1 pièce », « 3 pièces »: zero reads as a word, as in `levelsAndRooms`. */
+export function howManyRooms(count: number): string {
+  return count === 0 ? "aucune pièce" : plural(count, "pièce", "pièces");
 }

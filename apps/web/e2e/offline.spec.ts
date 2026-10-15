@@ -6,7 +6,9 @@ import {
   expectSynced,
   offlineBanner,
   renameInPlace,
+  room,
   roomName,
+  swipeLeft,
   syncPill,
   test,
   toast,
@@ -139,4 +141,26 @@ test("a rename on one device shows up on another without a reload", async ({
   // pull only comes every 30 s, past this timeout.
   await expectRooms(secondDevice, "RDC", ["Cuisine ouverte"], { timeout: 10_000 });
   expect(await secondDevice.evaluate(() => "e2eSameDocument" in window)).toBe(true);
+});
+
+test("a room swiped away offline waits on the device: gestures keep the test offline", async ({
+  page,
+  context,
+}) => {
+  await createProperty(page, uniqueName("Maison"));
+  await addLevel(page, "RDC");
+  await typeRooms(page, "RDC", ["Cuisine", "Séjour"]);
+  await expectRooms(page, "RDC", ["Cuisine", "Séjour"]);
+  await expectSynced(page);
+
+  await context.setOffline(true);
+  await expect(syncPill(page)).toHaveAccessibleName("Hors ligne. Voir le détail");
+  // Swipes are DevTools protocol touch input, and closing a protocol session puts the network
+  // back: the app would then sync the deletion at once.
+  await swipeLeft(room(page, "RDC", "Cuisine"));
+  await expectRooms(page, "RDC", ["Séjour"]);
+  await expect(syncPill(page)).toHaveAccessibleName(
+    "Hors ligne, 1 modification en attente. Voir le détail",
+  );
+  expect(await page.evaluate(() => navigator.onLine)).toBe(false);
 });

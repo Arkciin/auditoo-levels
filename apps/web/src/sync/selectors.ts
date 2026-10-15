@@ -52,6 +52,21 @@ export function selectProperty(view: Snapshot, id: string): Property | undefined
 }
 
 /**
+ * Whether the level is on screen: it and its property exist and are not deleted. Anything that
+ * edits it, or adds to it, would bring them back (edit wins over delete).
+ */
+export function isLevelLive(view: Snapshot, id: string): boolean {
+  const level = view.levels.get(id);
+  return level?.deletedAt === null && selectProperty(view, level.propertyId) !== undefined;
+}
+
+/** Whether the space is on screen: it, its level and its property exist and are not deleted. */
+export function isSpaceLive(view: Snapshot, id: string): boolean {
+  const space = view.spaces.get(id);
+  return space?.deletedAt === null && isLevelLive(view, space.levelId);
+}
+
+/**
  * Non-deleted levels of a property in display order, each with its non-deleted spaces in display
  * order. Spaces of a deleted level are hidden with it.
  */

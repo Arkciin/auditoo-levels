@@ -1,17 +1,23 @@
 import {
+  addLevel,
   backToList,
   createProperty,
   expect,
+  expectRooms,
   expectSynced,
+  newRoomInput,
   propertyRow,
   propertyTitle,
   reloadOnceSynced,
+  roomName,
   test,
   toast,
+  typeRooms,
   uniqueName,
 } from "./support";
 
-// The system back button (`page.goBack()`) after leaving a logement: it must never lead back to it.
+// The system back button (`page.goBack()`): after leaving a logement, it must never lead back to
+// it; on a logement's screen, it must not lose what is being typed.
 
 test("the back arrow goes back to the list, so the system back button then leaves it", async ({
   page,
@@ -104,4 +110,24 @@ test("after a reload, a logement deleted from its screen still shows its undo to
   await page.getByRole("menuitem", { name: "Supprimer le logement", exact: true }).tap();
   await expect(page).toHaveURL("/");
   await expect(toast(page, `Logement « ${name} » supprimé`)).toBeVisible();
+});
+
+test("the system back button keeps what was being typed: a room, a new name", async ({ page }) => {
+  const name = uniqueName("Maison");
+  await createProperty(page, name);
+  await addLevel(page, "RDC");
+  await typeRooms(page, "RDC", ["Cuisine"]);
+
+  await newRoomInput(page, "RDC").fill("Salon"); // no Enter, no « Terminé »
+  await page.goBack();
+  await expect(propertyRow(page, name)).toBeVisible();
+  await page.goForward();
+  await expectRooms(page, "RDC", ["Cuisine", "Salon"]);
+
+  await roomName(page, "Cuisine").tap();
+  await page.getByRole("textbox", { name: "Nom de la pièce" }).fill("Cuisine ouverte");
+  await page.goBack();
+  await expect(propertyRow(page, name)).toBeVisible();
+  await page.goForward();
+  await expectRooms(page, "RDC", ["Cuisine ouverte", "Salon"]);
 });

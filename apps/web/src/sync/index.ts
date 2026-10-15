@@ -9,6 +9,7 @@ export {
   describePendingMutations,
   describeRejection,
   quote,
+  withRooms,
 } from "./describe";
 export {
   SyncProvider,
@@ -20,6 +21,8 @@ export {
   useView,
 } from "./react";
 export {
+  isLevelLive,
+  isSpaceLive,
   type LevelStructure,
   type PropertySummary,
   selectProperties,

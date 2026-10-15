@@ -10,7 +10,7 @@
  * inside French quotes (« Cuisine »). Playwright normalizes whitespace when matching strings, not
  * regular expressions: regular expressions here use `\s`.
  */
-import { test as base, expect, type Locator, type Page } from "@playwright/test";
+import { test as base, type CDPSession, expect, type Locator, type Page } from "@playwright/test";
 
 export { expect };
 
@@ -347,66 +347,83 @@ export async function renameInPlace(name: Locator, field: Locator, newName: stri
 const SWIPE_STEPS = 10;
 const SWIPE_ATTEMPTS = 3;
 
-/** Set by the page when the finger of a swipe lands: on the row to swipe or not. */
-type SwipeProbe = { e2eFingerOnRow?: boolean };
+const touchSessions = new WeakMap<Page, Promise<CDPSession>>();
+
+/**
+ * The page's DevTools protocol session for touch input, opened once and kept: detaching one
+ * silently undoes `context.setOffline(true)`, so a gesture that opened and detached its own would
+ * bring a test that went offline back online.
+ */
+function touchSession(page: Page): Promise<CDPSession> {
+  let session = touchSessions.get(page);
+  if (!session) {
+    session = page.context().newCDPSession(page);
+    touchSessions.set(page, session);
+  }
+  return session;
+}
+
+/** Set by the page when the finger of a swipe lands: where the swipe starts or not. */
+type SwipeProbe = { e2eFingerOnTarget?: boolean };
 
 /**
  * Swipes `row` to the left with one finger, well past the 40 % of its width that deletes it (a
- * room), or reveals its « Supprimer » button (a level, a logement: see `deleteButton`).
+ * room), or reveals its « Supprimer » button (a level, a logement: see `deleteButton`). The finger
+ * lands on the name, or on `from`, an element of the row (one that must not start a swipe).
  *
  * Real touch input through the DevTools protocol, as a phone produces it: pointer events of type
  * "touch", with the browser's own hit testing, implicit pointer capture and `touch-action`
  * (Playwright's touchscreen only taps). A mouse drag is no substitute: on a link (a logement's
  * row), it starts the browser's native drag and drop, which cancels the pointer.
  */
-export async function swipeLeft(row: Locator): Promise<void> {
+export async function swipeLeft(row: Locator, { from }: { from?: Locator } = {}): Promise<void> {
   const page = row.page();
-  const cdp = await page.context().newCDPSession(page);
+  const cdp = await touchSession(page);
   const touch = (type: "touchStart" | "touchMove", x: number, y: number) =>
     cdp.send("Input.dispatchTouchEvent", { type, touchPoints: [{ x, y }] });
-  try {
-    for (let attempt = 1; ; attempt++) {
-      // Clear of the sticky header and of the bottom bar.
-      await row.evaluate((element) =>
-        element.scrollIntoView({ block: "center", behavior: "instant" }),
-      );
-      const box = await row.boundingBox();
-      if (!box) throw new Error("The row to swipe is not visible");
-      const y = box.y + box.height / 2;
-      // On the name, clear of the buttons at the right (menu, drag handle): they never swipe.
-      const fromX = box.x + box.width * 0.6;
-      const toX = box.x + box.width * 0.1;
+  for (let attempt = 1; ; attempt++) {
+    // Clear of the sticky header and of the bottom bar.
+    await row.evaluate((element) =>
+      element.scrollIntoView({ block: "center", behavior: "instant" }),
+    );
+    const box = await row.boundingBox();
+    if (!box) throw new Error("The row to swipe is not visible");
+    // Still, first: a row that was swiped open slides back with its buttons.
+    await from?.hover({ trial: true });
+    const start = from ? await from.boundingBox() : box;
+    if (!start) throw new Error("Where the swipe starts is not visible");
+    const y = start.y + start.height / 2;
+    // On the name, clear of the buttons at the right (menu, drag handle): they never swipe.
+    const fromX = from ? start.x + start.width / 2 : box.x + box.width * 0.6;
+    const toX = fromX - box.width * 0.5;
 
-      // The row may move between measuring it and touching it: the list of logements changes
-      // whenever another test adds one. Lift the finger if it landed elsewhere, and try again.
-      await row.evaluate((element) => {
-        const probe = window as SwipeProbe;
-        delete probe.e2eFingerOnRow;
-        const record = (event: Event) => {
-          probe.e2eFingerOnRow = element.contains(event.target as Node);
-        };
-        document.addEventListener("pointerdown", record, { once: true, capture: true });
-      });
-      await touch("touchStart", fromX, y);
-      await page.waitForFunction(() => "e2eFingerOnRow" in window);
-      if (!(await page.evaluate(() => (window as SwipeProbe).e2eFingerOnRow))) {
-        await cdp.send("Input.dispatchTouchEvent", { type: "touchCancel", touchPoints: [] });
-        if (attempt < SWIPE_ATTEMPTS) continue;
-        throw new Error("The finger kept landing outside the row to swipe");
-      }
-
-      // One move per frame, as a finger does. Moves sent back to back make a swipe of several
-      // pixels per millisecond: the browser then takes the next tap (on a revealed « Supprimer »)
-      // for one that stops a fling, and sends no click.
-      for (let step = 1; step <= SWIPE_STEPS; step++) {
-        await touch("touchMove", fromX + ((toX - fromX) * step) / SWIPE_STEPS, y);
-        await nextFrames(page, 1);
-      }
-      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-      return;
+    // The row may move between measuring it and touching it: the list of logements changes
+    // whenever another test adds one. Lift the finger if it landed elsewhere, and try again.
+    await (from ?? row).evaluate((element) => {
+      const probe = window as SwipeProbe;
+      delete probe.e2eFingerOnTarget;
+      const record = (event: Event) => {
+        probe.e2eFingerOnTarget = element.contains(event.target as Node);
+      };
+      document.addEventListener("pointerdown", record, { once: true, capture: true });
+    });
+    await touch("touchStart", fromX, y);
+    await page.waitForFunction(() => "e2eFingerOnTarget" in window);
+    if (!(await page.evaluate(() => (window as SwipeProbe).e2eFingerOnTarget))) {
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchCancel", touchPoints: [] });
+      if (attempt < SWIPE_ATTEMPTS) continue;
+      throw new Error("The finger kept landing outside where the swipe starts");
     }
-  } finally {
-    await cdp.detach();
+
+    // One move per frame, as a finger does. Moves sent back to back make a swipe of several
+    // pixels per millisecond: the browser then takes the next tap (on a revealed « Supprimer »)
+    // for one that stops a fling, and sends no click.
+    for (let step = 1; step <= SWIPE_STEPS; step++) {
+      await touch("touchMove", fromX + ((toX - fromX) * step) / SWIPE_STEPS, y);
+      await nextFrames(page, 1);
+    }
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    return;
   }
 }
 
@@ -448,21 +465,17 @@ interface Finger {
 }
 
 async function withFinger<T>(page: Page, use: (finger: Finger) => Promise<T>): Promise<T> {
-  const cdp = await page.context().newCDPSession(page);
+  const cdp = await touchSession(page);
   const touch = async (type: "touchStart" | "touchMove", x: number, y: number) => {
     await cdp.send("Input.dispatchTouchEvent", { type, touchPoints: [{ x, y }] });
   };
-  try {
-    return await use({
-      down: (x, y) => touch("touchStart", x, y),
-      move: (x, y) => touch("touchMove", x, y),
-      up: async () => {
-        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-      },
-    });
-  } finally {
-    await cdp.detach();
-  }
+  return use({
+    down: (x, y) => touch("touchStart", x, y),
+    move: (x, y) => touch("touchMove", x, y),
+    up: async () => {
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    },
+  });
 }
 
 /** The middle of a visible element, in the viewport's coordinates. */

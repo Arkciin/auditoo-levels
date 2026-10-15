@@ -1,13 +1,13 @@
 // Audits a running production build with Lighthouse the way a phone first loads it: mobile
 // emulation (Moto G Power, simulated slow 4G, 4x CPU slowdown) and empty storage, so no service
-// worker yet. Prints the median of a few runs for the four categories, with the median run's
-// metrics, and keeps that run's HTML report in .lighthouse/.
+// worker yet. Of a few runs, prints the scores of the four categories and the metrics of the
+// one with the median performance score, and keeps that run's HTML report in .lighthouse/.
 //
 //   pnpm build && pnpm start              # or audit any deployed URL
 //   pnpm lighthouse [url] [--runs=3] [--min=95]
 //
 // The URL defaults to http://localhost:3000; CHROME_PATH picks the browser. With --min, the
-// script fails when a category scores below it.
+// script fails when a category of that run scores below it.
 //
 // Lighthouse runs through `pnpm dlx` rather than as a dependency: its hundred packages would sit
 // in every install for an occasional audit, and its optional OpenTelemetry peer would split
@@ -83,7 +83,9 @@ results.sort((a, b) => score(a.lhr, "performance") - score(b.lhr, "performance")
 const median = results[Math.floor(results.length / 2)];
 const { lhr } = median;
 
-console.log(`\nLighthouse ${lhr.lighthouseVersion}, ${url}, mobile, median of ${runs} runs`);
+console.log(
+  `\nLighthouse ${lhr.lighthouseVersion}, ${url}, mobile: the median run by performance, of ${runs}`,
+);
 console.table(
   Object.fromEntries(CATEGORIES.map((category) => [category, { score: score(lhr, category) }])),
 );

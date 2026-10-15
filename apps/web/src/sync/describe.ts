@@ -386,16 +386,19 @@ function subject(kind: EntityKind, name: string | undefined): string {
   return name === undefined ? NOUNS[kind] : `${NOUNS[kind]} ${quote(name)}`;
 }
 
-/** « avec ses 3 pièces », « avec sa pièce », or nothing for a level without rooms. */
-function withRooms(count: number): string {
+/**
+ * « avec ses 3 pièces », « avec sa pièce », or nothing for a level without rooms: how a level's
+ * rooms are mentioned when it is copied, deleted or restored with them.
+ */
+export function withRooms(count: number): string {
   if (count === 0) return "";
   return count === 1 ? " avec sa pièce" : ` avec ses ${count}\u00a0pièces`;
 }
 
+/** « Pièce « Chambre 3 » renommée en « Bureau » », its noun first like every description. */
 function renamed(kind: EntityKind, before: string | undefined, after: string): string {
   const verb = kind === "space" ? "renommée" : "renommé";
-  const renamedEntity = before === undefined ? NOUNS[kind] : quote(before);
-  return `${renamedEntity} ${verb} en ${quote(after)}`;
+  return `${subject(kind, before)} ${verb} en ${quote(after)}`;
 }
 
 /**

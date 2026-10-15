@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-router";
 import type * as React from "react";
 
+import { RenameHint } from "@/components/editable-text";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
 import { RejectionToasts } from "@/features/sync-status/rejection-toasts";
@@ -30,6 +31,7 @@ function RootLayout() {
       </div>
       <Toaster />
       <RejectionToasts />
+      <RenameHint />
     </>
   );
 }

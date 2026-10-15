@@ -63,9 +63,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { quote, toastUndo, useSafeMutate } from "@/features/use-safe-mutate";
 import { haptic } from "@/lib/haptics";
-import { plural } from "@/lib/suggestions";
+import { howManyRooms } from "@/lib/suggestions";
 import { cn } from "@/lib/utils";
-import type { LevelStructure } from "@/sync";
+import { isLevelLive, isSpaceLive, type LevelStructure, useSyncClient, withRooms } from "@/sync";
 import { AddSpace } from "./add-space";
 import { HighlightProvider, HighlightTint, scrollBehavior, useHighlight } from "./highlight";
 import { MoveSpaceDrawer } from "./move-space-drawer";
@@ -374,12 +374,6 @@ export function StructureBoard({
   );
 }
 
-/** « avec ses 3 pièces », « avec sa pièce », or nothing: how toasts mention a level's rooms. */
-function withRooms(count: number): string {
-  if (count === 0) return "";
-  return count === 1 ? " avec sa pièce" : ` avec ses ${count} pièces`;
-}
-
 /** The name of a level or a room: a button that turns into a field (EditableText). */
 const NAME_SELECTOR = '[data-slot="editable-text"]';
 
@@ -433,6 +427,7 @@ function LevelSection({
     data: { type: "level", name: level.name } satisfies DragData,
     attributes: { roleDescription: ROLE_DESCRIPTION },
   });
+  const client = useSyncClient();
   const safeMutate = useSafeMutate();
   const duplicateLevel = useDuplicateLevel(propertyId);
   const highlight = useHighlight();
@@ -504,13 +499,14 @@ function LevelSection({
                 editing={renaming}
                 onEditingChange={setRenaming}
                 onSave={rename}
+                canSaveOnUnmount={() => isLevelLive(client.getState().view, level.id)}
                 className="block max-w-full text-lg leading-tight font-bold"
                 inputClassName="h-9 text-lg font-bold"
               />
             </h2>
             {renaming ? null : (
               <span className="shrink-0 text-sm text-muted-foreground tabular-nums">
-                {plural(spaces.length, "pièce", "pièces")}
+                {howManyRooms(spaces.length)}
               </span>
             )}
           </div>
@@ -524,6 +520,7 @@ function LevelSection({
                   size="icon"
                   aria-label={`Actions du niveau ${level.name}`}
                   className="text-muted-foreground"
+                  data-no-swipe
                 >
                   <EllipsisVertical />
                 </Button>
@@ -633,6 +630,7 @@ function SpaceRow({
     data: { type: "space", name: space.name } satisfies DragData,
     attributes: { roleDescription: ROLE_DESCRIPTION },
   });
+  const client = useSyncClient();
   const safeMutate = useSafeMutate();
   const [renaming, setRenaming] = useState(false);
   const rowRef = useRef<HTMLLIElement | null>(null);
@@ -671,6 +669,7 @@ function SpaceRow({
             editing={renaming}
             onEditingChange={setRenaming}
             onSave={rename}
+            canSaveOnUnmount={() => isSpaceLive(client.getState().view, space.id)}
             className="-ml-2 h-full flex-1 pl-2 -outline-offset-2"
             inputClassName="h-9"
           />
@@ -807,7 +806,7 @@ function DragPreview({
         <DatumMarker className="mb-px" />
         <span className="flex-1 truncate pb-1.5 text-lg font-bold">{level.name}</span>
         <span className="pb-2 text-sm text-muted-foreground tabular-nums">
-          {plural(containers[level.id]?.length ?? 0, "pièce", "pièces")}
+          {howManyRooms(containers[level.id]?.length ?? 0)}
         </span>
         <PreviewButtons />
       </div>

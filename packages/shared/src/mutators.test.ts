@@ -290,10 +290,16 @@ describe("mutators", () => {
         );
       });
 
-      it("refuses ids used twice, or the source's id for the copy", () => {
-        expect(parse({ spaces: [room(1), room(1)] }).success).toBe(false);
-        expect(parse({ spaces: [{ ...room(1), id: COPY }] }).success).toBe(false);
-        expect(parse({ id: RDC }).success).toBe(false);
+      it("refuses ids used twice, or the source's id for the copy, in French", () => {
+        for (const overrides of [
+          { spaces: [room(1), room(1)] },
+          { spaces: [{ ...room(1), id: COPY }] },
+          { id: RDC },
+        ]) {
+          expect(parse(overrides).error?.issues[0]?.message).toBe(
+            "Le niveau n'a pas pu être dupliqué",
+          );
+        }
       });
 
       it("validates each room like a room created on its own", () => {

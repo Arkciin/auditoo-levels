@@ -338,6 +338,49 @@ describe("SyncClient", () => {
     expect(client.getState().status.connection).toBe("online");
   });
 
+  it("does not call the server unreachable when the network comes back, before it answers", async () => {
+    const browser = new EventTarget();
+    vi.stubGlobal("window", browser);
+    let online = true;
+    const network = new MemoryTransport(new MemoryServer());
+    let answer = Promise.resolve();
+    const transport: Transport = {
+      push: async (request) => {
+        await answer;
+        return network.push(request);
+      },
+      pull: async (request) => {
+        await answer;
+        return network.pull(request);
+      },
+    };
+    const client = await createClient({
+      indexedDB: new IDBFactory(),
+      transport,
+      isOnline: () => online,
+    });
+    // A request fails as the phone loses its network, before the browser notices.
+    network.mode = "offline";
+    client.start();
+    await waitForState(client, (s) => s.status.nextAttemptAt !== null);
+    expect(client.getState().status.connection).toBe("unreachable");
+    online = false;
+    browser.dispatchEvent(new Event("offline"));
+    expect(client.getState().status.connection).toBe("offline");
+
+    const stalled = deferred(); // The server takes its time to answer.
+    cleanups.unshift(async () => stalled.resolve());
+    answer = stalled.promise;
+    network.mode = "online";
+    online = true;
+    browser.dispatchEvent(new Event("online"));
+    expect(client.getState().status).toMatchObject({ connection: "online", phase: "syncing" });
+
+    stalled.resolve();
+    await waitForState(client, (s) => s.status.lastSyncedAt !== null);
+    expect(client.getState().status.connection).toBe("online");
+  });
+
   it("restores pending mutations after a restart, then syncs them", async () => {
     const server = new MemoryServer();
     const device = await createDevice(server);

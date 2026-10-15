@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/drawer";
 import { quote, toastRestored, useSafeMutate } from "@/features/use-safe-mutate";
 import { plural } from "@/lib/suggestions";
-import { useView } from "@/sync";
+import { useView, withRooms } from "@/sync";
 import { type DeletedLevel, type DeletedSpace, selectDeletedStructure } from "@/sync/selectors";
 
 /**
@@ -129,10 +129,4 @@ function DeletedItems({
 /** The rooms a deleted level hides: « 3 pièces », « 1 pièce », « Aucune pièce ». */
 function rooms(count: number): string {
   return count === 0 ? "Aucune pièce" : plural(count, "pièce", "pièces");
-}
-
-/** « avec ses 3 pièces », « avec sa pièce », or nothing, as the toast of its deletion said. */
-function withRooms(count: number): string {
-  if (count === 0) return "";
-  return count === 1 ? " avec sa pièce" : ` avec ses ${count} pièces`;
 }
