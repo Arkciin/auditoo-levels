@@ -17,33 +17,36 @@ for hours, never loses data, and is fast with one thumb.
 | `packages/shared/src/schemas.ts` | Zod schemas: entities, `nameSchema` (input), looser row schemas |
 | `packages/shared/src/mutators.ts` | The 15 mutations: argument schemas and deterministic mutators. Every data change lives here |
 | `packages/shared/src/positions.ts` | Fractional indexes: `positionAtIndex`, `positionAtEnd`, `compareByPosition` |
-| `packages/shared/src/protocol.ts` | Push/pull wire format, `mutationSchema`, `applyMutation` |
+| `packages/shared/src/protocol.ts` | Push/pull wire format, `mutationSchema` (derived), `applyMutation`, push size limits (`takePushBatch`), `readStoredMutation`, `isReadable`, `clientTag` |
 | `packages/shared/src/snapshot.ts` | In-memory snapshot, `SnapshotTx`, `applyMutations` (rebase), `applyPull` |
 | `apps/server/src/sync/` | `push.ts`, `pull.ts`, `server-tx.ts` (mutators on SQL), `queries.ts` (SELECTs in shared shapes), `pokes.ts` (SSE) |
 | `apps/server/src/db/` | `migrations.ts` (append-only SQL), `migrate.ts`, `sql.ts` (node-postgres or PGlite) |
-| `apps/server/src/app.ts` | Routes, request validation, cache headers, static hosting of the PWA |
+| `apps/server/src/app.ts` | Routes, request validation, body limit, cache headers, static hosting of the PWA |
 | `apps/server/src/security-headers.ts` | Content Security Policy, Permissions-Policy and the other security headers |
-| `apps/web/src/sync/` | `sync-client.ts` (engine), `storage.ts` (IndexedDB), `transport.ts`, `react.tsx` (hooks), `selectors.ts`, `describe.ts` (French texts) |
+| `apps/web/src/sync/` | `sync-client.ts` (engine), `storage.ts` (IndexedDB), `transport.ts`, `react.tsx` (hooks), `selectors.ts` (deleted items too), `describe.ts` (French texts) |
 | `apps/web/src/sync/test-support/` | `MemoryServer` (reference server), `TestDevice`, fixtures |
-| `apps/web/src/features/` | Screens; `use-safe-mutate.ts` (mutate with a French error toast, undo toast); `sync-status/` (pill, sheet, toasts of rejected changes) |
-| `apps/web/src/components/` | Layout, `SwipeToDelete`, `EditableText`, `DatumMarker`; `ui/` is shadcn/ui source |
-| `apps/web/src/lib/suggestions.ts` | French level ranking, room suggestions, numbering, `plural()` |
-| `apps/web/src/sw.ts`, `pwa.ts`, `install.ts` | Service worker (Serwist), its registration, the install offer |
-| `apps/web/e2e/` | Playwright specs; `support.ts` holds the French locators and the gestures, `accessibility.ts` the axe scans |
-| `scripts/` | `bundle-size.mjs` (`pnpm size`, the budget CI enforces), `lighthouse.mjs` (`pnpm lighthouse`) |
+| `apps/web/src/features/structure/` | A logement's screen: `structure-board.tsx` (levels, rooms, drag and drop, menus, focus after a delete), `add-space.tsx` (rapid room entry), `use-move.ts` (moves and their undo), `use-duplicate-level.ts`, `move-space-drawer.tsx` (« Déplacer vers… »), `deleted-items-sheet.tsx`, `highlight.tsx` |
+| `apps/web/src/features/properties/` | The home screen, `deleted-properties-sheet.tsx`, `install-sheet.tsx` (iOS steps), the example house |
+| `apps/web/src/features/` | `use-safe-mutate.ts` (mutate with a French error toast; `toastUndo`); `sync-status/` (pill, sheet, offline banner, toasts of rejected changes) |
+| `apps/web/src/components/` | `app-layout.tsx` (header, action bar, large titles), `SwipeToDelete`, `EditableText`, `DeletedRow`, `DatumMarker`; `ui/` is shadcn/ui source (touch opens menus on a tap; `useOpenedOnce` mounts a sheet on its first opening) |
+| `apps/web/src/lib/` | `suggestions.ts` (French level ranking, room suggestions, numbering, names of level copies, `plural()`), `keep-in-sight.ts`, `relative-time.ts`, `haptics.ts` |
+| `apps/web/src/sw.ts`, `pwa.ts`, `install.ts` | Service worker (Serwist), its registration and the offline-ready toast, the install offer |
+| `apps/web/e2e/` | Playwright specs; `support.ts` holds the French locators, the gestures and the gates (fixtures), `accessibility.ts` the axe scans |
+| `scripts/` | `bundle-size.mjs` (`pnpm size`, the budget CI enforces), `lighthouse.mjs` (`pnpm lighthouse`), `with-postgres.sh` (a throwaway PostgreSQL for `pnpm e2e:postgres`) |
 
 ## Commands
 
 ```sh
 pnpm dev                 # API on :3000 (PGlite) + web on :5173 (Vite, proxies /api)
 pnpm check               # lint + typecheck + unit tests: run it before you finish
-pnpm test                # Vitest, all workspaces (about a minute)
+pnpm test                # Vitest, all workspaces (about a minute and a half)
 pnpm format              # Biome: formatting, safe lint fixes, import order
-pnpm build && pnpm e2e   # Playwright against the production build
+pnpm build && pnpm e2e   # Playwright against the production build (E2E_PORT=4175 for another port)
+pnpm e2e:postgres        # after a build: the same suite on a throwaway PostgreSQL cluster
 pnpm size                # after a build: compressed sizes against the CI budget
 pnpm lighthouse          # against a running build (pnpm start): Lighthouse on an emulated phone
 
-# One workspace (shared, server or web), the web app's component tests only, or one file:
+# One project (shared, server, web, or "web (node)" / "web (dom)"), or one file:
 pnpm vitest run --project web
 pnpm vitest run --project "web (dom)"
 pnpm vitest run apps/web/src/sync/convergence.test.ts
@@ -91,6 +94,8 @@ pnpm vitest run apps/web/src/sync/convergence.test.ts
 
 - **TypeScript strict** everywhere (`noUncheckedIndexedAccess`, `verbatimModuleSyntax`, no unused
   locals or parameters). No `any`; a cast only at a typing boundary, with a comment saying why.
+  The web app targets ES2022 (older Safari on tablets), and so does its typecheck of the shared
+  code it imports: no `toSorted`, `findLast` or other ES2023 methods outside the server.
 - **Biome** formats and lints: 2 spaces, double quotes, 100 columns, sorted imports. Run
   `pnpm format`; CI runs `biome ci`.
 - **Comments explain why** (a constraint, a trap, a tradeoff), not what the next line does. Keep
@@ -101,7 +106,13 @@ pnpm vitest run apps/web/src/sync/convergence.test.ts
 - **Touch first.** `Button` sizes give 44 px targets; inputs keep `text-base` (16 px, or iOS zooms
   in); interactive elements inside a swipeable row get `data-no-swipe`; every control has an
   accessible French name, which the e2e and component tests select by, and which starts with its
-  visible text when it has some (WCAG 2.5.3: speech input users say what they see).
+  visible text when it has some (WCAG 2.5.3: speech input users say what they see). A gesture that
+  deletes a lot (a level, a logement) only reveals a button (`SwipeToDelete`'s `confirmLabel`).
+- **The focus never falls to the page body**, where keyboard and screen reader users lose their
+  place, and where a phone opens no keyboard: after a delete it goes to the next row, after a
+  rename back to the name. A menu item that opens a field or a sheet acts in the menu's
+  `onCloseAutoFocus` (see `SpaceRow`), and a row drops its menu while its name is edited: a menu
+  still closing takes the focus back.
 - **Reading data**: components use `useView(selector)` with selectors memoized per snapshot
   (`apps/web/src/sync/selectors.ts`), and `useSyncStatus()` for the status alone. Event handlers
   that compute a position or a name read `client.getState().view`: taps can outrun React renders.
@@ -120,16 +131,21 @@ pnpm vitest run apps/web/src/sync/convergence.test.ts
   Library and user-event by role and French accessible name, assert on what the user sees; a
   component that reads data gets a real `SyncClient` (`TestDevice`). happy-dom has no layout:
   stub sizes (`offsetWidth`) when behaviour depends on them.
-- Two gates run through the whole e2e suite: any Content Security Policy violation fails a test
-  (no inline script, no `eval`, no `style` attribute in markup; React's `style` prop is fine), and
-  `accessibility.spec.ts` fails on a serious or critical axe violation. A new screen, sheet or menu
-  gets an `expectAccessible` step there.
+- E2E specs import `test` and `expect` from `./support`, whose fixtures are two gates: any
+  Content Security Policy violation fails a test (no inline script, no `eval`, no `style`
+  attribute in markup; React's `style` prop is fine), and so does an uncaught exception.
+  `accessibility.spec.ts` fails on a serious or critical axe violation: a new screen or sheet gets
+  an `expectAccessible` step there, a new menu an `expectAccessibleMenu` one.
+- In e2e tests, gesture like a finger (`tap()`, the swipe and drag helpers of `support.ts`), and
+  check `toBeFocused()` before typing into a field a tap opened: `locator.press()` and `fill()`
+  focus the element themselves, and once hid a field that never got the focus.
 - Colours: a new pairing of design tokens gets a line in `apps/web/src/styles.test.ts`, which
   checks WCAG AA contrast in both themes.
 - The convergence simulation (`apps/web/src/sync/convergence.test.ts`) must stay green, and must
   know every mutation (`simulateUser`): it fails when a mutation kind is never exercised.
 - `MemoryServer` mirrors the server's protocol rules: change a rule in both, test it in both.
 - UI changes: run `pnpm build && pnpm e2e`; update `apps/web/e2e/support.ts` when labels change.
+  SQL changes: also `pnpm e2e:postgres` where PostgreSQL is installed (CI runs it on PostgreSQL 18).
 
 ## Checklist: a new field, end to end
 
@@ -142,12 +158,13 @@ Example: a room's surface area, in m², optional.
    a device's IndexedDB lack it, and a pull only resends rows that change.
 3. **Mutator** (`packages/shared/src/mutators.ts`): the arguments schema in `mutationArgsSchemas`,
    then the mutator: `requireSpace`, `reviveLevel(tx, space.levelId)`, then
-   `putSpace({ ...space, area, deletedAt: null })`. Also set `area: null` in `createSpace`, so that
-   optimistic rows equal server rows.
+   `putSpace({ ...space, area, deletedAt: null })`. Also set `area: null` in `createSpace`, and in
+   the rooms `duplicateLevel` creates (or carry the source's areas in its arguments): optimistic
+   rows must equal server rows.
 4. **Protocol**: nothing to add. `mutationSchema` (`packages/shared/src/protocol.ts`) derives one
    envelope per entry of `mutationArgsSchemas`, so the server can never reject the new mutation as
    invalid for lack of one.
-5. **Migration** (`apps/server/src/db/migrations.ts`): append `003_space_area` with
+5. **Migration** (`apps/server/src/db/migrations.ts`): append `004_space_area` with
    `ALTER TABLE spaces ADD COLUMN area double precision CHECK (area > 0)`. Not `numeric`: both
    drivers return it as a string, which fails the pull schema.
 6. **Server mapping**: `area` in `SELECT_SPACES` (`apps/server/src/sync/queries.ts`) and in the
@@ -161,5 +178,6 @@ Example: a room's surface area, in m², optional.
    `data-no-swipe`, saved with `useSafeMutate()("setSpaceArea", …)`.
 9. **Tests**: the mutator, edit-wins included (`packages/shared/src/mutators.test.ts`); a push and
    pull round trip (`apps/server/src/sync/sync.test.ts`); the descriptions, rejection included
-   (`describe.test.ts`); a weighted kind in the convergence simulation; an e2e step if users see it.
-10. **Verify**: `pnpm check`, then `pnpm build && pnpm e2e`.
+   (`describe.test.ts`); a weighted kind in the convergence simulation; a component test and an
+   e2e step if users see it.
+10. **Verify**: `pnpm check`, then `pnpm build && pnpm e2e` (and `pnpm e2e:postgres`).
