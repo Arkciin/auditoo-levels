@@ -1,5 +1,5 @@
 import type { Snapshot } from "@repo/shared";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useCallback, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -85,6 +85,12 @@ const suggestion = (name: string) =>
     name,
   });
 
+/** The rooms of R+1 as saved on the device, whatever the screen shows. */
+const savedRoomNames = () =>
+  selectStructure(client.getState().view, PROPERTY)
+    .find((group) => group.level.id === R1)
+    ?.spaces.map((space) => space.name);
+
 async function openRoomField(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: "Ajouter une pièce" }));
   expect(roomField()).toHaveFocus();
@@ -169,6 +175,37 @@ describe("AddSpace", () => {
 
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     await waitFor(() => expect(roomNames()).toEqual(["Cuisine", "Buanderie"]));
+  });
+
+  it("adds the room still being typed when the field goes away with its screen", async () => {
+    const user = renderLevel();
+    await openRoomField(user);
+
+    await user.type(roomField(), "Cuisine{Enter}Buanderie");
+    cleanup(); // The back button: the screen unmounts, and an unmount does not blur.
+
+    await waitFor(() => expect(savedRoomNames()).toEqual(["Cuisine", "Buanderie"]));
+  });
+
+  it("drops the room being typed once Escape closed the field, or its level is deleted", async () => {
+    const user = renderLevel();
+    await openRoomField(user);
+    await user.type(roomField(), "Buanderie{Escape}");
+    cleanup();
+
+    renderLevel();
+    await openRoomField(user);
+    await user.type(roomField(), "{Control>}a{/Control}Cellier");
+    // Deleted by a swipe, or on another device: a room added to it would bring it back.
+    await client.mutate("deleteLevel", { id: R1 });
+    await waitFor(() => expect(screen.queryByRole("textbox")).not.toBeInTheDocument());
+    await new Promise((resolve) => setTimeout(resolve, 50)); // What an add would take.
+
+    expect(client.getState().view.levels.get(R1)?.deletedAt).not.toBeNull();
+    expect(savedRoomNames()).toBeUndefined();
+    expect([...client.getState().view.spaces.values()].map((space) => space.name)).toEqual([
+      "Chambre 1",
+    ]);
   });
 
   it("closes with Escape or « Terminé », giving the focus to « Ajouter une pièce »", async () => {

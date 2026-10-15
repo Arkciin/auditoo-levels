@@ -10,10 +10,12 @@ type Save = (next: string) => Promise<void> | void;
 /** A room name as a screen shows it: once saved, the new name comes back as the value. */
 function RoomName({
   onSave,
+  canSaveOnUnmount,
   editing,
   onEditingChange,
 }: {
   onSave: Save;
+  canSaveOnUnmount?: () => boolean;
   editing?: boolean;
   onEditingChange?: (editing: boolean) => void;
 }) {
@@ -26,16 +28,19 @@ function RoomName({
         await onSave(next);
         setName(next);
       }}
+      {...(canSaveOnUnmount ? { canSaveOnUnmount } : {})}
       {...(editing === undefined ? {} : { editing })}
       {...(onEditingChange ? { onEditingChange } : {})}
     />
   );
 }
 
-function setup(onSave: Save = vi.fn()) {
+function setup(onSave: Save = vi.fn(), canSaveOnUnmount?: () => boolean) {
   const user = userEvent.setup();
-  render(<RoomName onSave={onSave} />);
-  return { user, onSave };
+  const { unmount } = render(
+    <RoomName onSave={onSave} {...(canSaveOnUnmount ? { canSaveOnUnmount } : {})} />,
+  );
+  return { user, onSave, unmount };
 }
 
 const nameButton = (name: string) => screen.getByRole("button", { name });
@@ -160,6 +165,47 @@ describe("EditableText", () => {
 
     expect(await screen.findByRole("button", { name: "Salon" })).toBeVisible();
     expect(onSave).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves what was typed when the field goes away unsaved, with its screen or row", async () => {
+    // The back button: the screen unmounts, and an unmount does not blur.
+    const canSaveOnUnmount = vi.fn(() => true);
+    const { user, onSave, unmount } = setup(vi.fn(), canSaveOnUnmount);
+
+    await rename(user, " Cuisine ouverte ");
+    unmount();
+
+    expect(canSaveOnUnmount).toHaveBeenCalledOnce();
+    expect(onSave).toHaveBeenCalledExactlyOnceWith("Cuisine ouverte");
+  });
+
+  it("drops what was typed when the field goes away, if it may no longer be saved", async () => {
+    // Deleted meanwhile, or its level: the save would bring them back (edit wins over delete).
+    for (const canSaveOnUnmount of [() => false, undefined]) {
+      const { user, onSave, unmount } = setup(vi.fn(), canSaveOnUnmount);
+
+      await rename(user, "Cuisine ouverte");
+      unmount();
+
+      expect(onSave).not.toHaveBeenCalled();
+    }
+  });
+
+  it("saves nothing as it goes away after Escape, nor what Enter is still saving", async () => {
+    const cancelled = setup(vi.fn(), () => true);
+    await rename(cancelled.user, "Salon{Escape}");
+    cancelled.unmount();
+    expect(cancelled.onSave).not.toHaveBeenCalled();
+
+    const saving = deferred();
+    const entered = setup(
+      vi.fn<Save>(() => saving.promise),
+      () => true,
+    );
+    await rename(entered.user, "Salon{Enter}");
+    entered.unmount();
+    saving.resolve();
+    expect(entered.onSave).toHaveBeenCalledExactlyOnceWith("Salon");
   });
 
   it("gives the focus back to the name once saved with Enter, or cancelled with Escape", async () => {

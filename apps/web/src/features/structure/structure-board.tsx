@@ -65,7 +65,7 @@ import { quote, toastUndo, useSafeMutate } from "@/features/use-safe-mutate";
 import { haptic } from "@/lib/haptics";
 import { plural } from "@/lib/suggestions";
 import { cn } from "@/lib/utils";
-import type { LevelStructure } from "@/sync";
+import { isLevelLive, isSpaceLive, type LevelStructure, useSyncClient } from "@/sync";
 import { AddSpace } from "./add-space";
 import { HighlightProvider, HighlightTint, scrollBehavior, useHighlight } from "./highlight";
 import { MoveSpaceDrawer } from "./move-space-drawer";
@@ -433,6 +433,7 @@ function LevelSection({
     data: { type: "level", name: level.name } satisfies DragData,
     attributes: { roleDescription: ROLE_DESCRIPTION },
   });
+  const client = useSyncClient();
   const safeMutate = useSafeMutate();
   const duplicateLevel = useDuplicateLevel(propertyId);
   const highlight = useHighlight();
@@ -504,6 +505,7 @@ function LevelSection({
                 editing={renaming}
                 onEditingChange={setRenaming}
                 onSave={rename}
+                canSaveOnUnmount={() => isLevelLive(client.getState().view, level.id)}
                 className="block max-w-full text-lg leading-tight font-bold"
                 inputClassName="h-9 text-lg font-bold"
               />
@@ -633,6 +635,7 @@ function SpaceRow({
     data: { type: "space", name: space.name } satisfies DragData,
     attributes: { roleDescription: ROLE_DESCRIPTION },
   });
+  const client = useSyncClient();
   const safeMutate = useSafeMutate();
   const [renaming, setRenaming] = useState(false);
   const rowRef = useRef<HTMLLIElement | null>(null);
@@ -671,6 +674,7 @@ function SpaceRow({
             editing={renaming}
             onEditingChange={setRenaming}
             onSave={rename}
+            canSaveOnUnmount={() => isSpaceLive(client.getState().view, space.id)}
             className="-ml-2 h-full flex-1 pl-2 -outline-offset-2"
             inputClassName="h-9"
           />

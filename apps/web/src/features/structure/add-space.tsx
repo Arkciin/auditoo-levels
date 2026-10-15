@@ -9,7 +9,7 @@ import { useSafeMutate } from "@/features/use-safe-mutate";
 import { haptic } from "@/lib/haptics";
 import { keepInSight } from "@/lib/keep-in-sight";
 import { nextSpaceName, suggestSpaceNames, typedSpaceName } from "@/lib/suggestions";
-import { selectStructure, useSyncClient } from "@/sync";
+import { isLevelLive, selectStructure, useSyncClient } from "@/sync";
 import { useHighlight } from "./highlight";
 
 /**
@@ -95,6 +95,20 @@ export function AddSpace({
     }
     window.scrollBy({ top: moved, behavior: "instant" });
   }, [spaces]);
+
+  // The entry goes away with its screen (the back button) or its level, and an unmount does not
+  // blur: a room typed but not added yet is added all the same, as « Terminé » would. Unless
+  // Escape closed the entry, or the level was deleted meanwhile (by a swipe, or on another
+  // device): a room added to it would bring it back (edit wins over delete).
+  const addTypedOnUnmount = useRef<() => void>(() => {});
+  useEffect(() => {
+    addTypedOnUnmount.current = () => {
+      const name = draft.trim();
+      if (!open || !name || !isLevelLive(client.getState().view, level.id)) return;
+      add((names) => typedSpaceName(name, names), { tapped: false });
+    };
+  });
+  useEffect(() => () => addTypedOnUnmount.current(), []);
 
   // Adds run one after the other so that each one sees the rooms added just before it.
   const queue = useRef<Promise<void>>(Promise.resolve());

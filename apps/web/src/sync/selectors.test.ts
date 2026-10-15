@@ -1,6 +1,8 @@
 import type { Level, Property, Space } from "@repo/shared";
 import { describe, expect, it } from "vitest";
 import {
+  isLevelLive,
+  isSpaceLive,
   selectDeletedProperties,
   selectDeletedStructure,
   selectProperties,
@@ -88,6 +90,41 @@ describe("selectProperty", () => {
     expect(selectProperty(view, uuid(1))?.name).toBe("Logement 1");
     expect(selectProperty(view, uuid(2))).toBeUndefined();
     expect(selectProperty(view, uuid(3))).toBeUndefined();
+  });
+});
+
+describe("isLevelLive and isSpaceLive", () => {
+  it("are true only when the entity and all its parents exist and are not deleted", () => {
+    const house = property(1, 1_000);
+    const gone = property(2, 1_000, 2_000);
+    const view = snapshotOf({
+      properties: [house, gone],
+      levels: [
+        level(11, house.id, "a0"),
+        level(12, house.id, "a1", 3_000),
+        level(13, gone.id, "a0"),
+      ],
+      spaces: [
+        space(21, uuid(11), "a0"),
+        space(22, uuid(11), "a1", 4_000),
+        space(23, uuid(12), "a0"), // In a deleted level.
+        space(24, uuid(13), "a0"), // In a deleted property.
+      ],
+    });
+
+    expect([11, 12, 13, 99].map((n) => isLevelLive(view, uuid(n)))).toEqual([
+      true,
+      false,
+      false,
+      false,
+    ]);
+    expect([21, 22, 23, 24, 99].map((n) => isSpaceLive(view, uuid(n)))).toEqual([
+      true,
+      false,
+      false,
+      false,
+      false,
+    ]);
   });
 });
 

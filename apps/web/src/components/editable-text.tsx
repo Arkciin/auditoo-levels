@@ -6,12 +6,14 @@ import { cn } from "@/lib/utils";
 
 /**
  * Text that turns into an input when tapped: the fastest way to rename on a phone.
- * Enter or leaving the field saves; Escape cancels; an empty or unchanged value is ignored.
- * `editing` can be driven from outside (e.g. a "Renommer" menu item).
+ * Enter or leaving the field saves, and so may its unmount (`canSaveOnUnmount`); Escape cancels;
+ * an empty or unchanged value is ignored. `editing` can be driven from outside (e.g. a
+ * "Renommer" menu item).
  */
 export function EditableText({
   value,
   onSave,
+  canSaveOnUnmount,
   label,
   editing: controlledEditing,
   onEditingChange,
@@ -21,6 +23,13 @@ export function EditableText({
   value: string;
   /** Called with the trimmed new value. May reject: the field then stays open. */
   onSave: (next: string) => Promise<void> | void;
+  /**
+   * Whether a value typed but not saved yet is saved when the open field goes away with its
+   * screen (the back button) or its row: an unmount does not blur. Saving revives what it renames
+   * and its parents (edit wins over delete): answer false once one of them is deleted. Without
+   * it, the value is dropped.
+   */
+  canSaveOnUnmount?: () => boolean;
   /** Accessible name of the field, e.g. "Nom de la pièce". */
   label: string;
   editing?: boolean;
@@ -35,8 +44,28 @@ export function EditableText({
   const committing = useRef(false);
   const wasEditing = useRef(editing);
   const hintId = useId();
+  /** What the open field holds once typed in; null while it is closed or untouched. */
+  const draft = useRef<string | null>(null);
+  /** The latest props, for the cleanup on unmount: its closure holds the first render's. */
+  const latest = useRef({ value, onSave, canSaveOnUnmount });
+  useEffect(() => {
+    latest.current = { value, onSave, canSaveOnUnmount };
+  });
+
+  useEffect(
+    () => () => {
+      const next = draft.current?.trim();
+      const { value, onSave, canSaveOnUnmount } = latest.current;
+      // Saving already (Enter), or nothing worth saving, or no longer allowed to.
+      if (committing.current || !next || next === value || !canSaveOnUnmount?.()) return;
+      // A refusal has nobody left to fix it: the caller reports it, as it does for Enter.
+      (async () => onSave(next))().catch(() => {});
+    },
+    [],
+  );
 
   function setEditing(next: boolean) {
+    if (!next) draft.current = null;
     setLocalEditing(next);
     onEditingChange?.(next);
   }
@@ -44,6 +73,7 @@ export function EditableText({
   useEffect(() => {
     const closed = wasEditing.current && !editing;
     wasEditing.current = editing;
+    if (!editing) draft.current = null; // closed from outside too
     if (editing) {
       const input = inputRef.current;
       input?.focus();
@@ -88,6 +118,9 @@ export function EditableText({
           "h-10 w-full min-w-0 rounded-md border border-input bg-card px-2 text-base outline-offset-0",
           inputClassName,
         )}
+        onChange={(event) => {
+          draft.current = event.target.value;
+        }}
         onKeyDown={(event) => {
           if (event.key === "Enter") {
             event.preventDefault();
