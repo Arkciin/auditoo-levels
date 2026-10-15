@@ -187,7 +187,9 @@ function PropertyRow({ summary }: { summary: PropertySummary }) {
             className="flex min-h-16 min-w-0 flex-1 items-center gap-3 py-3 pr-2 pl-4 outline-offset-[-2px]"
           >
             <div className="min-w-0 flex-1">
-              <p className="truncate font-semibold">{property.name}</p>
+              {/* Two lines: an address cut on one would lose its end, the postcode and the city,
+                  which tell apart addresses that start alike. */}
+              <p className="line-clamp-2 font-semibold break-words">{property.name}</p>
               <p className="text-sm text-muted-foreground tabular-nums">
                 {levelsAndRooms(levelCount, spaceCount)}
               </p>
