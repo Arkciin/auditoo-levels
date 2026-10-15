@@ -63,7 +63,7 @@ describe("describeMutation", () => {
       { name: "createProperty", args: { id: uuid(2), name: "12 rue des Lilas" } },
     ],
     [
-      "« 12 rue des Lilas » renommé en « 14 rue des Lilas »",
+      "Logement « 12 rue des Lilas » renommé en « 14 rue des Lilas »",
       { name: "renameProperty", args: { id: PROPERTY, name: "14 rue des Lilas" } },
     ],
     ["Logement « 12 rue des Lilas » supprimé", { name: "deleteProperty", args: { id: PROPERTY } }],
@@ -76,7 +76,7 @@ describe("describeMutation", () => {
       },
     ],
     [
-      "« RDC » renommé en « Rez-de-chaussée »",
+      "Niveau « RDC » renommé en « Rez-de-chaussée »",
       { name: "renameLevel", args: { id: RDC, name: "Rez-de-chaussée" } },
     ],
     ["Niveau « R+1 » déplacé", { name: "moveLevel", args: { id: R1, position: "Zz" } }],
@@ -90,7 +90,7 @@ describe("describeMutation", () => {
       { name: "createSpace", args: { id: uuid(24), levelId: RDC, name: "Salon", position: "a3" } },
     ],
     [
-      "« Cuisine » renommée en « Cuisine ouverte »",
+      "Pièce « Cuisine » renommée en « Cuisine ouverte »",
       { name: "renameSpace", args: { id: KITCHEN, name: "Cuisine ouverte" } },
     ],
     [
@@ -160,10 +160,10 @@ describe("describePendingMutations", () => {
 
     expect(describePendingMutations(base, pending)).toEqual(
       [
-        "« Cuisine » renommée en « Cuisine ouverte »",
-        "« Cuisine ouverte » renommée en « Cuisine américaine »",
+        "Pièce « Cuisine » renommée en « Cuisine ouverte »",
+        "Pièce « Cuisine ouverte » renommée en « Cuisine américaine »",
         "Niveau « Combles » ajouté",
-        "« Combles » renommé en « Grenier »",
+        "Niveau « Combles » renommé en « Grenier »",
         "Pièce « Débarras » ajoutée",
         "Pièce « Débarras » déplacée vers « RDC »",
         "Pièce « Débarras » déplacée",
@@ -183,9 +183,9 @@ describe("describePendingMutations", () => {
     expect(describePendingMutations(base, pending)).toEqual(
       [
         "Niveau « RDC » dupliqué en « RDC (copie) » avec sa pièce",
-        "« Pièce 1 » renommée en « Cellier »",
+        "Pièce « Pièce 1 » renommée en « Cellier »",
         "Pièce « Cellier » déplacée vers « RDC »",
-        "« RDC (copie) » renommé en « Studio »",
+        "Niveau « RDC (copie) » renommé en « Studio »",
       ].map(french),
     );
   });

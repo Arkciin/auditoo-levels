@@ -395,10 +395,10 @@ export function withRooms(count: number): string {
   return count === 1 ? " avec sa pièce" : ` avec ses ${count}\u00a0pièces`;
 }
 
+/** « Pièce « Chambre 3 » renommée en « Bureau » », its noun first like every description. */
 function renamed(kind: EntityKind, before: string | undefined, after: string): string {
   const verb = kind === "space" ? "renommée" : "renommé";
-  const renamedEntity = before === undefined ? NOUNS[kind] : quote(before);
-  return `${renamedEntity} ${verb} en ${quote(after)}`;
+  return `${subject(kind, before)} ${verb} en ${quote(after)}`;
 }
 
 /**
