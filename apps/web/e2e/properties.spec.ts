@@ -23,8 +23,8 @@ test("create a logement, rename it, swipe it away and undo", async ({ page, seco
 
   await test.step("create it from the « Nouveau logement » sheet: its screen opens", async () => {
     await createProperty(page, name);
-    await expect(structureSummary(page)).toHaveText("0 niveau, 0 pièce");
     await expect(page.getByRole("heading", { name: "Aucun niveau pour l’instant" })).toBeVisible();
+    await expect(structureSummary(page)).toBeHidden();
 
     // Something to count on the list.
     await addLevel(page, "RDC");

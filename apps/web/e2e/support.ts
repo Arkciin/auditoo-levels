@@ -197,9 +197,12 @@ export async function createProperty(page: Page, name: string): Promise<void> {
 
 // --- Structure -----------------------------------------------------------------------------------
 
-/** "3 niveaux, 5 pièces", under the header of a logement's screen. */
+/**
+ * "3 niveaux, 5 pièces" or "1 niveau, aucune pièce", under the name of a logement on its screen;
+ * absent while it has no level (its empty state says so).
+ */
 export function structureSummary(page: Page): Locator {
-  return page.getByRole("main").getByText(/^\d+\s+niveaux?,\s+\d+\s+pièces?$/);
+  return page.getByRole("main").getByText(/^\d+\s+niveaux?,\s+(?:\d+\s+pièces?|aucune\s+pièce)$/);
 }
 
 export function level(page: Page, name: string): Locator {
@@ -498,7 +501,7 @@ const MAX_DRAG_PX = 800;
  *
  * Steering by the announcement, the feedback the app gives screen reader users, rather than by
  * coordinates computed beforehand keeps this independent of the layout, which changes during a
- * drag: levels shrink to their headers, a room entering another level pushes its new neighbours.
+ * drag: a room entering another level pushes its new neighbours.
  */
 export async function dragTo(
   handle: Locator,

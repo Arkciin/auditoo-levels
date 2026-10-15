@@ -40,7 +40,8 @@ wake the server. Once visited, the app opens from its cache and syncs when the s
 ## Features
 
 - **Logements, levels, rooms**: add them, rename in place (tap the name), delete with a swipe or
-  from their ⋮ menu, and undo from the toast.
+  from their ⋮ menu, and undo from the toast, or later from « Logements supprimés » and « Éléments
+  supprimés » in the ⋮ menus.
 - **Duplicate a level** with its rooms, for identical floors: R+1 becomes R+2, bedrooms take the
   next numbers (Chambre 4, Chambre 5), and the copy can be undone.
 - **Drag and drop** by the grip handle: reorder rooms within a level, move a room to another level,
@@ -54,8 +55,8 @@ wake the server. Once visited, the app opens from its cache and syncs when the s
 - **Several devices**: changes reach the other devices within seconds (server-sent events), and
   conflicts resolve the same way everywhere (see [DESIGN.md](DESIGN.md#conflict-policy)).
 - **Fast entry on site**: one-tap level and room suggestions in French, smart numbering
-  (Chambre 1, Chambre 2…), levels placed where they belong (Sous-sol below RDC), and an example
-  house to try it all.
+  (Chambre 1, Chambre 2…), levels listed from the lowest to the highest (a Sous-sol added after the
+  RDC goes before it), and an example house to try it all.
 - **Installable PWA**: « Installer l'application » in the home screen's menu (the browser's prompt,
   or Safari's steps on iPhone and iPad), a toast once the app works offline, an update prompt.
 - **Mobile-first** (Chrome on Android, Safari on iOS): French UI, dark mode, 44 px touch targets,
@@ -94,7 +95,7 @@ Then switch the network off in the browser's developer tools and keep working.
 | `pnpm start` | Production server: API and built PWA on port 3000 |
 | `pnpm test` | All unit, integration and component tests (Vitest); no database needed |
 | `pnpm test:watch` | The same, in watch mode |
-| `pnpm e2e` | End-to-end tests (Playwright) against the production build: run `pnpm build` first |
+| `pnpm e2e` | End-to-end tests (Playwright) against the production build: run `pnpm build` first. `E2E_PORT` picks the server's port (default 4174), e.g. to run two checkouts side by side |
 | `pnpm typecheck` | `tsc` in every workspace, service worker included |
 | `pnpm lint` / `pnpm format` | Biome: check, or fix formatting, lint issues and import order |
 | `pnpm check` | `lint`, `typecheck` and `test` |
@@ -166,7 +167,7 @@ pnpm build && pnpm e2e    # 16 end-to-end tests, accessibility and security incl
   delete (thresholds, flicks, axis lock, the swallowed click, failed deletions), renaming in place,
   rapid room entry, the sync indicator. They live next to the components (`*.test.tsx`).
 - **End-to-end tests** (Playwright) drive an emulated Pixel 7 against the production server, which
-  they start on port 4174 with a fresh in-memory database. Every test fails on an uncaught
+  they start on port 4174 (or `E2E_PORT`) with a fresh in-memory database. Every test fails on an uncaught
   exception or a Content Security Policy violation. An accessibility spec scans every screen,
   sheet, menu, field and banner with [axe](https://github.com/dequelabs/axe-core) (WCAG 2.2 A and
   AA, best practices), in light and dark mode: a serious or critical violation fails it. Install
@@ -184,16 +185,17 @@ production build (`pnpm start`) with an empty database. Median of 7 runs, 15 Oct
 
 | Performance | Accessibility | Best practices | SEO |
 | :---: | :---: | :---: | :---: |
-| 90 | 100 | 100 | 100 |
+| 91 | 100 | 100 | 100 |
 
-First Contentful Paint 2.2 s, Largest Contentful Paint 2.7 s, Total Blocking Time 240 ms,
+First Contentful Paint 2.3 s, Largest Contentful Paint 2.6 s, Total Blocking Time 170 ms,
 Cumulative Layout Shift 0. Measured with Chromium 141 on a 2-vCPU Linux container shared with
 other builds, the browser at raised CPU priority to limit their effect: performance ranged from
-87 to 91 across runs. Before the preloads, Brotli and the sliced first render, one run gave 80,
-and SEO 91 (no robots.txt). What remains is starting a client-rendered app on a slow phone:
-evaluating React, the router and Zod, then React's first commit, where both bottom sheets of the
-home screen mount closed and vaul forces a layout for each. Next steps: mount sheets on first
-open, and prerender the app shell into `index.html` so that something paints before the
+84 to 95 across runs. Before the preloads, Brotli and the sliced first render, one run gave 80,
+and SEO 91 (no robots.txt). Mounting bottom sheets on their first opening rather than closed
+with the home screen moved nothing beyond that noise: the build before it, measured in turns with
+it, also had a median of 91 (Total Blocking Time 200 ms). What remains is starting a
+client-rendered app on a slow phone: evaluating React, the router and Zod, then React's first
+commit. Next step: prerender the app shell into `index.html` so that something paints before the
 JavaScript runs.
 
 What a phone downloads (`pnpm size`; CI fails past a budget):

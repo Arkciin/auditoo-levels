@@ -5,6 +5,7 @@ import {
   duplicateSpaceNames,
   levelInsertIndex,
   levelRank,
+  levelsAndRooms,
   nextSpaceName,
   plural,
   suggestLevelNames,
@@ -161,5 +162,17 @@ describe("plural", () => {
   it("follows French rules", () => {
     expect(plural(0, "pièce", "pièces")).toBe("0 pièce");
     expect(plural(2, "pièce", "pièces")).toBe("2 pièces");
+  });
+});
+
+describe("levelsAndRooms", () => {
+  it.each([
+    [0, 0, "Aucun niveau"],
+    [1, 0, "1 niveau, aucune pièce"],
+    [2, 0, "2 niveaux, aucune pièce"],
+    [1, 1, "1 niveau, 1 pièce"],
+    [3, 12, "3 niveaux, 12 pièces"],
+  ])("%i levels and %i rooms read « %s »", (levels, rooms, expected) => {
+    expect(levelsAndRooms(levels, rooms)).toBe(expected);
   });
 });

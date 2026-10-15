@@ -1,6 +1,14 @@
-import { newId, type Property } from "@repo/shared";
+import { NAME_MAX_LENGTH, newId, type Property } from "@repo/shared";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { ChevronRight, Download, EllipsisVertical, Plus, Sparkles, Trash } from "lucide-react";
+import {
+  ArchiveRestore,
+  ChevronRight,
+  Download,
+  EllipsisVertical,
+  Plus,
+  Sparkles,
+  Trash,
+} from "lucide-react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -15,6 +23,7 @@ import {
   DrawerFooter,
   DrawerHeader,
   DrawerTitle,
+  useOpenedOnce,
 } from "@/components/ui/drawer";
 import {
   DropdownMenu,
@@ -25,7 +34,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { quote, toastUndo, useSafeMutate } from "@/features/use-safe-mutate";
 import { promptInstall, useInstallOffer } from "@/install";
-import { plural } from "@/lib/suggestions";
+import { levelsAndRooms } from "@/lib/suggestions";
 import {
   describeMutationError,
   type PropertySummary,
@@ -34,6 +43,7 @@ import {
   useSyncStatus,
   useView,
 } from "@/sync";
+import { DeletedPropertiesSheet } from "./deleted-properties-sheet";
 import { createExampleProperty } from "./example-property";
 import { InstallSheet } from "./install-sheet";
 
@@ -46,8 +56,12 @@ export function PropertiesScreen() {
   const [creating, setCreating] = useState(false);
   const install = useInstallOffer();
   const [installSheet, setInstallSheet] = useState(false);
-  /** Set when the iOS instructions must open, once the menu has closed. */
-  const openInstallSheet = useRef(false);
+  const [deletedSheet, setDeletedSheet] = useState(false);
+  /** The sheet to open once the menu has closed: the iOS instructions, or deleted logements. */
+  const sheetAfterMenu = useRef<"install" | "deleted" | null>(null);
+  const newPropertyMounted = useOpenedOnce(creating);
+  const installSheetMounted = useOpenedOnce(installSheet);
+  const deletedSheetMounted = useOpenedOnce(deletedSheet);
 
   const openProperty = (propertyId: string) =>
     navigate({ to: "/logements/$propertyId", params: { propertyId } });
@@ -76,17 +90,19 @@ export function PropertiesScreen() {
             <DropdownMenuContent
               align="end"
               onCloseAutoFocus={(event) => {
-                // The sheet opens once the menu has let go of the focus (see SpaceRow).
-                if (!openInstallSheet.current) return;
-                openInstallSheet.current = false;
+                // A sheet opens once the menu has let go of the focus (see SpaceRow).
+                const sheet = sheetAfterMenu.current;
+                if (sheet === null) return;
+                sheetAfterMenu.current = null;
                 event.preventDefault();
-                setInstallSheet(true);
+                if (sheet === "install") setInstallSheet(true);
+                else setDeletedSheet(true);
               }}
             >
               {install ? (
                 <DropdownMenuItem
                   onSelect={() => {
-                    if (install === "ios") openInstallSheet.current = true;
+                    if (install === "ios") sheetAfterMenu.current = "install";
                     else void promptInstall();
                   }}
                 >
@@ -97,6 +113,14 @@ export function PropertiesScreen() {
               <DropdownMenuItem onSelect={() => void createExample()}>
                 <Sparkles />
                 Ajouter un logement d’exemple
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => {
+                  sheetAfterMenu.current = "deleted";
+                }}
+              >
+                <ArchiveRestore />
+                Logements supprimés
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -123,8 +147,15 @@ export function PropertiesScreen() {
           Nouveau logement
         </Button>
       </ActionBar>
-      <NewPropertyDrawer open={creating} onOpenChange={setCreating} onCreated={openProperty} />
-      <InstallSheet open={installSheet} onOpenChange={setInstallSheet} />
+      {newPropertyMounted ? (
+        <NewPropertyDrawer open={creating} onOpenChange={setCreating} onCreated={openProperty} />
+      ) : null}
+      {installSheetMounted ? (
+        <InstallSheet open={installSheet} onOpenChange={setInstallSheet} />
+      ) : null}
+      {deletedSheetMounted ? (
+        <DeletedPropertiesSheet open={deletedSheet} onOpenChange={setDeletedSheet} />
+      ) : null}
     </>
   );
 }
@@ -156,7 +187,7 @@ function PropertyRow({ summary }: { summary: PropertySummary }) {
             <div className="min-w-0 flex-1">
               <p className="truncate font-semibold">{property.name}</p>
               <p className="text-sm text-muted-foreground tabular-nums">
-                {plural(levelCount, "niveau", "niveaux")}, {plural(spaceCount, "pièce", "pièces")}
+                {levelsAndRooms(levelCount, spaceCount)}
               </p>
             </div>
             <ChevronRight aria-hidden="true" className="size-5 shrink-0 text-muted-foreground" />
@@ -250,7 +281,7 @@ function NewPropertyDrawer({
               placeholder="12 rue des Lilas, Lyon"
               autoComplete="off"
               enterKeyHint="done"
-              maxLength={80}
+              maxLength={NAME_MAX_LENGTH}
               required
               autoFocus
             />
