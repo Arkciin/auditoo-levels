@@ -95,10 +95,12 @@ export const mutationArgsSchemas = {
           `Un niveau de plus de ${MAX_DUPLICATED_SPACES}\u00a0pièces ne peut pas être dupliqué`,
         ),
     })
+    // Distinct ids, other than the source's. The app draws them from newId() and never breaks
+    // this, but the message would reach its user (describeMutationError): French, and generic.
     .refine(
       ({ id, sourceId, spaces }) =>
         new Set([id, sourceId, ...spaces.map((space) => space.id)]).size === spaces.length + 2,
-      "A level copy needs distinct ids, other than its source's",
+      "Le niveau n'a pas pu être dupliqué",
     ),
 
   createSpace: z.object({
