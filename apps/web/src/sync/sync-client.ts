@@ -912,6 +912,10 @@ export class SyncClient {
   // --- Triggers --------------------------------------------------------------------------------
 
   private readonly handleOnline = (): void => {
+    // A request that failed as the network went away said nothing about the server: without
+    // this, the status would read « Serveur injoignable » until the server's first answer.
+    this.networkDown = false;
+    this.publish();
     this.reopenEventsIfClosed();
     this.requestSync("urgent");
   };
