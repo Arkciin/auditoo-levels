@@ -2,7 +2,8 @@
  * Device persistence of the sync engine, in IndexedDB.
  *
  * Object stores:
- * - `meta`: key-value pairs (`clientId`, `cursor`);
+ * - `meta`: key-value pairs (`clientId`, `cursor`, and `epoch`, the server database the base comes
+ *   from);
  * - `properties`, `levels`, `spaces`: the last snapshot confirmed by the server (the "base");
  * - `outbox`: local mutations the server has not confirmed yet, keyed by their id.
  *

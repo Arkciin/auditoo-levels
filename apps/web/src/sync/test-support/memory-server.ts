@@ -106,9 +106,10 @@ export class MemoryServer {
         this.rejections.get(request.clientId) ?? new Map<number, RejectionReason>();
       this.rejections.set(request.clientId, rejections);
       const rejected: PushResponse["rejected"] = [];
-      // In id order, each id once, like the server.
-      const envelopes = request.mutations
-        .toSorted((a, b) => a.id - b.id)
+      // In id order, each id once, like the server. (Not `toSorted`: the app's sources, these
+      // included, compile against ES2022, its build target.)
+      const envelopes = [...request.mutations]
+        .sort((a, b) => a.id - b.id)
         .filter((envelope, index, sorted) => envelope.id !== sorted[index - 1]?.id);
       for (const envelope of envelopes) {
         if (envelope.id <= lastMutationId) {
