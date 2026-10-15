@@ -68,6 +68,27 @@ test("add levels from the sheet and rooms by typing or from suggestions", async 
   });
 });
 
+test("a double tap on a level suggestion adds one level", async ({ page }) => {
+  await createProperty(page, uniqueName("Maison"));
+  await addLevel(page, "RDC");
+  await page.getByRole("button", { name: "Ajouter un niveau", exact: true }).tap();
+  const sheet = page.getByRole("dialog", { name: "Ajouter un niveau" });
+  const suggestion = sheet.getByRole("button", { name: "R+1", exact: true });
+  await suggestion.hover({ trial: true }); // the sheet is up and still
+  const box = await suggestion.boundingBox();
+  if (!box) throw new Error("The « R+1 » suggestion is not visible");
+
+  // A second tap as the sheet slides away, where R+2 is now suggested.
+  await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(sheet.getByRole("button", { name: "R+2", exact: true })).toBeVisible();
+  await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+
+  await expect(sheet).toBeHidden();
+  await expectLevels(page, ["RDC", "R+1"]);
+  await reloadOnceSynced(page);
+  await expectLevels(page, ["RDC", "R+1"]);
+});
+
 test("rename a room in place, undo the deletion of a room or a level", async ({ page }) => {
   await createProperty(page, uniqueName("Maison"));
   await addLevel(page, "RDC");
