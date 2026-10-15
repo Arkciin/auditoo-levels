@@ -9,6 +9,7 @@ export {
   describePendingMutations,
   describeRejection,
   quote,
+  withRooms,
 } from "./describe";
 export {
   SyncProvider,

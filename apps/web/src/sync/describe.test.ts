@@ -5,6 +5,7 @@ import {
   describeMutationError,
   describePendingMutations,
   describeRejection,
+  withRooms,
 } from "./describe";
 import { StorageClosedError } from "./storage";
 import { type Action, snapshotOf, uuid } from "./test-support/fixtures";
@@ -129,6 +130,12 @@ describe("describeMutation", () => {
     if (copyOfUnknown.name !== "duplicateLevel") throw new Error("unreachable");
     copyOfUnknown.args.sourceId = unknown;
     expect(describeIt(copyOfUnknown)).toBe(french("Niveau dupliqué en « RDC (copie) »"));
+  });
+});
+
+describe("withRooms", () => {
+  it("mentions a level's rooms, with a non-breaking space after their count", () => {
+    expect([0, 1, 3].map(withRooms)).toEqual(["", " avec sa pièce", " avec ses 3\u00a0pièces"]);
   });
 });
 

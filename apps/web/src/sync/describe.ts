@@ -386,8 +386,11 @@ function subject(kind: EntityKind, name: string | undefined): string {
   return name === undefined ? NOUNS[kind] : `${NOUNS[kind]} ${quote(name)}`;
 }
 
-/** « avec ses 3 pièces », « avec sa pièce », or nothing for a level without rooms. */
-function withRooms(count: number): string {
+/**
+ * « avec ses 3 pièces », « avec sa pièce », or nothing for a level without rooms: how a level's
+ * rooms are mentioned when it is copied, deleted or restored with them.
+ */
+export function withRooms(count: number): string {
   if (count === 0) return "";
   return count === 1 ? " avec sa pièce" : ` avec ses ${count}\u00a0pièces`;
 }

@@ -65,7 +65,7 @@ import { quote, toastUndo, useSafeMutate } from "@/features/use-safe-mutate";
 import { haptic } from "@/lib/haptics";
 import { plural } from "@/lib/suggestions";
 import { cn } from "@/lib/utils";
-import { isLevelLive, isSpaceLive, type LevelStructure, useSyncClient } from "@/sync";
+import { isLevelLive, isSpaceLive, type LevelStructure, useSyncClient, withRooms } from "@/sync";
 import { AddSpace } from "./add-space";
 import { HighlightProvider, HighlightTint, scrollBehavior, useHighlight } from "./highlight";
 import { MoveSpaceDrawer } from "./move-space-drawer";
@@ -372,12 +372,6 @@ export function StructureBoard({
       />
     </HighlightProvider>
   );
-}
-
-/** « avec ses 3 pièces », « avec sa pièce », or nothing: how toasts mention a level's rooms. */
-function withRooms(count: number): string {
-  if (count === 0) return "";
-  return count === 1 ? " avec sa pièce" : ` avec ses ${count} pièces`;
 }
 
 /** The name of a level or a room: a button that turns into a field (EditableText). */
