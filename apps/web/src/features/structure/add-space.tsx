@@ -37,6 +37,14 @@ export function AddSpace({
   const inputRef = useRef<HTMLInputElement>(null);
   const entryRef = useRef<HTMLDivElement>(null);
   const spacerRef = useRef<HTMLDivElement>(null);
+  const reopenRef = useRef<HTMLButtonElement>(null);
+  /** The entry closed with the focus in it (see `close`): « Ajouter une pièce » takes it. */
+  const refocus = useRef(false);
+  useEffect(() => {
+    if (open || !refocus.current) return;
+    refocus.current = false;
+    reopenRef.current?.focus();
+  }, [open]);
   /**
    * Where the entry was on screen when suggestions were tapped, and the rooms they add that are
    * not drawn yet: each one pushes the chips down a row, under a thumb about to tap again.
@@ -140,10 +148,20 @@ export function AddSpace({
     });
   }
 
+  /** Closes the entry; the focus goes to the button that takes its place, not to the page body. */
+  function close() {
+    const focused = document.activeElement;
+    refocus.current =
+      focused === null || focused === document.body || !!entryRef.current?.contains(focused);
+    onOpenChange(false);
+  }
+
   if (!open) {
     return (
       <button
+        ref={reopenRef}
         type="button"
+        data-add-space="button"
         onClick={() => onOpenChange(true)}
         className="flex h-12 w-full items-center gap-2 pl-10 font-semibold text-primary"
       >
@@ -169,7 +187,7 @@ export function AddSpace({
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Escape") onOpenChange(false);
+              if (event.key === "Escape") close();
             }}
             onFocus={() => {
               setTyping(true);
@@ -182,6 +200,7 @@ export function AddSpace({
             enterKeyHint="send"
             maxLength={NAME_MAX_LENGTH}
             data-no-swipe
+            data-add-space="field"
             autoFocus
           />
           <Button
@@ -217,7 +236,7 @@ export function AddSpace({
           className="self-start"
           onClick={() => {
             addTyped();
-            onOpenChange(false);
+            close();
           }}
         >
           Terminé

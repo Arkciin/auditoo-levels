@@ -151,6 +151,43 @@ describe("EditableText", () => {
     expect(onSave).toHaveBeenCalledTimes(1);
   });
 
+  it("gives the focus back to the name once saved with Enter, or cancelled with Escape", async () => {
+    const { user } = setup();
+
+    await rename(user, "Salon{Enter}");
+    expect(await screen.findByRole("button", { name: "Salon, renommer" })).toHaveFocus();
+
+    await user.keyboard("{Enter}"); // the name, focused, opens the field again
+    expect(field()).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(nameButton("Salon")).toHaveFocus();
+  });
+
+  it("gives the focus back to the name when the field is left for no other control", async () => {
+    const { user } = setup();
+
+    await rename(user, "Salon");
+    await user.click(document.body); // a tap beside the controls
+
+    expect(await screen.findByRole("button", { name: "Salon, renommer" })).toHaveFocus();
+  });
+
+  it("leaves the focus on the control the field was left for", async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <RoomName onSave={vi.fn()} />
+        <button type="button">Suivant</button>
+      </>,
+    );
+
+    await rename(user, "Salon");
+    await user.tab();
+
+    expect(await screen.findByRole("button", { name: "Salon, renommer" })).not.toHaveFocus();
+    expect(screen.getByRole("button", { name: "Suivant" })).toHaveFocus();
+  });
+
   it("can be opened from outside, e.g. by a « Renommer » menu item", async () => {
     const user = userEvent.setup();
     const onEditingChange = vi.fn();

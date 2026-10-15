@@ -171,16 +171,17 @@ describe("AddSpace", () => {
     await waitFor(() => expect(roomNames()).toEqual(["Cuisine", "Buanderie"]));
   });
 
-  it("closes with Escape or « Terminé »", async () => {
+  it("closes with Escape or « Terminé », giving the focus to « Ajouter une pièce »", async () => {
     const user = renderLevel();
 
     await openRoomField(user);
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ajouter une pièce" })).toHaveFocus();
 
     await openRoomField(user);
     await user.click(screen.getByRole("button", { name: "Terminé" }));
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Ajouter une pièce" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Ajouter une pièce" })).toHaveFocus();
   });
 });

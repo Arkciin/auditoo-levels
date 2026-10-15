@@ -312,6 +312,28 @@ function withRooms(count: number): string {
   return count === 1 ? " avec sa pièce" : ` avec ses ${count} pièces`;
 }
 
+/** The name of a level or a room: a button that turns into a field (EditableText). */
+const NAME_SELECTOR = '[data-slot="editable-text"]';
+
+/** A level's room entry (AddSpace): its « Ajouter une pièce » button, or its field once open. */
+function roomEntry(level: Element | null, part: "button" | "field"): HTMLElement | null {
+  return level?.querySelector<HTMLElement>(`[data-add-space="${part}"]`) ?? null;
+}
+
+/**
+ * Where the focus goes once `row` (a level's section, a room's item) is deleted from its menu,
+ * found while the row is still on the page: the name of the row after it, else of the one before,
+ * else `fallback`. Never the page body, where keyboard and screen reader users lose their place.
+ */
+function focusAfterDeleting(row: Element | null, fallback: () => HTMLElement | null): () => void {
+  const next = row?.nextElementSibling?.querySelector<HTMLElement>(NAME_SELECTOR) ?? null;
+  const previous = row?.previousElementSibling?.querySelector<HTMLElement>(NAME_SELECTOR) ?? null;
+  return () => {
+    const target = [next, previous].find((name) => name?.isConnected) ?? fallback();
+    target?.focus();
+  };
+}
+
 function LevelSection({
   propertyId,
   level,
@@ -348,7 +370,8 @@ function LevelSection({
   const [renaming, setRenaming] = useState(false);
   const [adding, setAdding] = useState(false);
   const sectionRef = useRef<HTMLElement | null>(null);
-  const focusRenameInput = useRef(false);
+  /** What to do once the menu has closed, instead of giving the focus back to its button. */
+  const afterMenu = useRef<(() => void) | null>(null);
   const spaces = useMemo(
     () => spaceIds.map((id) => spacesById.get(id)).filter((s): s is Space => s !== undefined),
     [spaceIds, spacesById],
@@ -436,21 +459,29 @@ function LevelSection({
             <DropdownMenuContent
               align="end"
               onCloseAutoFocus={(event) => {
-                // Let the rename field keep the focus it just received.
-                if (focusRenameInput.current) event.preventDefault();
-                focusRenameInput.current = false;
+                const then = afterMenu.current;
+                afterMenu.current = null;
+                if (!then) return;
+                event.preventDefault();
+                then();
               }}
             >
               <DropdownMenuItem
                 onSelect={() => {
-                  focusRenameInput.current = true;
+                  afterMenu.current = () => {}; // the rename field has taken the focus
                   setRenaming(true);
                 }}
               >
                 <Pencil />
                 Renommer
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setAdding(true)}>
+              <DropdownMenuItem
+                onSelect={() => {
+                  // The room field, which the menu would take the focus from as it closes.
+                  afterMenu.current = () => roomEntry(sectionRef.current, "field")?.focus();
+                  setAdding(true);
+                }}
+              >
                 <Plus />
                 Ajouter une pièce
               </DropdownMenuItem>
@@ -459,7 +490,16 @@ function LevelSection({
                 Dupliquer le niveau
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem variant="destructive" onSelect={() => void remove()}>
+              <DropdownMenuItem
+                variant="destructive"
+                onSelect={() => {
+                  // No level left: the screen's « Ajouter un niveau ».
+                  afterMenu.current = focusAfterDeleting(sectionRef.current, () =>
+                    document.querySelector<HTMLElement>('[data-slot="action-bar"] button'),
+                  );
+                  void remove();
+                }}
+              >
                 <Trash />
                 Supprimer le niveau
               </DropdownMenuItem>
@@ -521,8 +561,9 @@ function SpaceRow({
   });
   const safeMutate = useSafeMutate();
   const [renaming, setRenaming] = useState(false);
-  /** What to do once the menu has closed and let go of the focus. */
-  const afterMenu = useRef<"rename" | "move" | null>(null);
+  const rowRef = useRef<HTMLLIElement | null>(null);
+  /** What to do once the menu has closed and let go of the focus, instead of taking it back. */
+  const afterMenu = useRef<(() => void) | null>(null);
 
   async function rename(name: string) {
     if (!(await safeMutate("renameSpace", { id: space.id, name }))) throw new Error("not saved");
@@ -537,7 +578,10 @@ function SpaceRow({
 
   return (
     <li
-      ref={setNodeRef}
+      ref={(node) => {
+        setNodeRef(node);
+        rowRef.current = node;
+      }}
       style={{ transform: CSS.Translate.toString(transform), transition }}
       data-highlight-id={space.id}
       className={cn("relative", isDragging && "z-10 opacity-40")}
@@ -571,19 +615,19 @@ function SpaceRow({
               <DropdownMenuContent
                 align="end"
                 onCloseAutoFocus={(event) => {
-                  // The rename field or the sheet takes the focus, not the menu button. The sheet
-                  // only opens now: a dialog opened while the menu still holds the focus can lose
-                  // it, and close at once.
-                  const next = afterMenu.current;
+                  // The rename field, the sheet or another row takes the focus, not the menu
+                  // button. The sheet only opens now: a dialog opened while the menu still holds
+                  // the focus can lose it, and close at once.
+                  const then = afterMenu.current;
                   afterMenu.current = null;
-                  if (next === null) return;
+                  if (!then) return;
                   event.preventDefault();
-                  if (next === "move") onMove?.(space);
+                  then();
                 }}
               >
                 <DropdownMenuItem
                   onSelect={() => {
-                    afterMenu.current = "rename";
+                    afterMenu.current = () => {}; // the rename field has taken the focus
                     setRenaming(true);
                   }}
                 >
@@ -593,14 +637,29 @@ function SpaceRow({
                 <DropdownMenuItem
                   disabled={onMove === undefined}
                   onSelect={() => {
-                    afterMenu.current = "move";
+                    afterMenu.current = () => onMove?.(space);
                   }}
                 >
                   <ArrowUpDown />
                   Déplacer vers…
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem variant="destructive" onSelect={() => void remove()}>
+                <DropdownMenuItem
+                  variant="destructive"
+                  onSelect={() => {
+                    // No room left: « Ajouter une pièce », or the level's name while the room
+                    // field is open (focusing the field would pop the keyboard up).
+                    const level = rowRef.current?.closest("section") ?? null;
+                    afterMenu.current = focusAfterDeleting(
+                      rowRef.current,
+                      () =>
+                        roomEntry(level, "button") ??
+                        level?.querySelector<HTMLElement>(NAME_SELECTOR) ??
+                        null,
+                    );
+                    void remove();
+                  }}
+                >
                   <Trash />
                   Supprimer la pièce
                 </DropdownMenuItem>

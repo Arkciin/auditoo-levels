@@ -196,6 +196,11 @@ export function level(page: Page, name: string): Locator {
   return page.getByRole("region", { name: `Niveau ${name}`, exact: true });
 }
 
+/** A level's name, in its heading: a button that turns into a field. */
+export function levelName(page: Page, name: string): Locator {
+  return level(page, name).getByRole("heading", { level: 2 }).getByRole("button");
+}
+
 /** A level's header, the row that swipes: its name, room count, menu and drag handle. */
 export function levelHeader(page: Page, name: string): Locator {
   return level(page, name)

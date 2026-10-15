@@ -8,6 +8,7 @@ import {
   level,
   levelAction,
   levelHeader,
+  levelName,
   moveRoomTo,
   newRoomInput,
   nextFrames,
@@ -254,6 +255,45 @@ test("act on a room from its menu: move it to another level, rename it, delete i
     await expectRooms(page, "RDC", ["Cuisine ouverte"]);
     await expectRooms(page, "R+1", ["Chambre 1", "Bureau"]);
   });
+});
+
+test("after a deletion from a menu, the focus goes to the next row, never to the page", async ({
+  page,
+}) => {
+  await createProperty(page, uniqueName("Maison"));
+  await addLevel(page, "RDC");
+  await typeRooms(page, "RDC", ["Entrée", "Cuisine", "Séjour"]);
+  await level(page, "RDC").getByRole("button", { name: "Terminé", exact: true }).tap();
+  await addLevel(page, "R+1");
+  await typeRooms(page, "R+1", ["Bureau"]);
+
+  await roomAction(page, "Cuisine", "Supprimer la pièce");
+  await expect(roomName(page, "Séjour")).toBeFocused(); // the room after it
+  await roomAction(page, "Séjour", "Supprimer la pièce");
+  await expect(roomName(page, "Entrée")).toBeFocused(); // the last one: the room before it
+  await roomAction(page, "Entrée", "Supprimer la pièce");
+  await expect(level(page, "RDC").getByRole("button", { name: "Ajouter une pièce" })).toBeFocused();
+
+  await levelAction(page, "RDC", "Supprimer le niveau");
+  await expect(levelName(page, "R+1")).toBeFocused();
+  await levelAction(page, "R+1", "Supprimer le niveau");
+  await expect(page.getByRole("button", { name: "Ajouter un niveau", exact: true })).toBeFocused();
+});
+
+test("after a rename, the focus is back on the name", async ({ page }) => {
+  await createProperty(page, uniqueName("Maison"));
+  await addLevel(page, "RDC");
+  await typeRooms(page, "RDC", ["Cuisine"]);
+
+  await roomAction(page, "Cuisine", "Renommer");
+  const field = page.getByRole("textbox", { name: "Nom de la pièce", exact: true });
+  await field.fill("Cuisine ouverte");
+  await field.press("Enter");
+  await expect(roomName(page, "Cuisine ouverte")).toBeFocused();
+
+  await levelAction(page, "RDC", "Renommer");
+  await page.getByRole("textbox", { name: "Nom du niveau", exact: true }).press("Escape");
+  await expect(levelName(page, "RDC")).toBeFocused();
 });
 
 test("duplicate a level with its rooms, then undo a copy", async ({ page }) => {
