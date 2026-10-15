@@ -35,7 +35,8 @@ export function AppHeader({
  *
  * ```tsx
  * const { headerRef, titleRef, titleUnderHeader } = useLargeTitle();
- * <AppHeader ref={headerRef} title={<CompactTitle shown={titleUnderHeader}>{name}</CompactTitle>} />
+ * const compact = <CompactTitle shown={titleUnderHeader}>{name}</CompactTitle>;
+ * <AppHeader ref={headerRef} title={compact} />
  * <ScreenBody><h1 ref={titleRef}>{name}</h1>…</ScreenBody>
  * ```
  */
@@ -53,7 +54,8 @@ export function useLargeTitle() {
     const watchTitle = () => {
       titleObserver?.disconnect();
       titleObserver = new IntersectionObserver(
-        ([entry]) => {
+        (entries) => {
+          const entry = entries.at(-1); // the latest, should a fast scroll have queued several
           if (!entry) return;
           const top = entry.rootBounds?.top ?? 0;
           setTitleUnderHeader(!entry.isIntersecting && entry.boundingClientRect.top < top);

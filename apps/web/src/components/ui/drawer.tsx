@@ -10,9 +10,9 @@ function Drawer({ ...props }: React.ComponentProps<typeof DrawerPrimitive.Root>)
 
 /**
  * Whether a sheet opened from outside (`open` prop) belongs in the tree yet: only from its first
- * opening, so that a screen pays nothing for sheets it never opens (vaul reads the window's size
- * as a drawer mounts, forcing a layout during the first render), and still once closed, so that
- * it slides out rather than vanishing.
+ * opening, so that a screen's first render does no work for sheets it may never open (a vaul
+ * drawer sets up its state, effects and listeners, and reads the window's size, as it mounts),
+ * and still once closed, so that it slides out rather than vanishing.
  *
  * ```tsx
  * const mounted = useOpenedOnce(open);
