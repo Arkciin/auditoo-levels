@@ -196,6 +196,21 @@ export function level(page: Page, name: string): Locator {
   return page.getByRole("region", { name: `Niveau ${name}`, exact: true });
 }
 
+/** A level's header, the row that swipes: its name, room count, menu and drag handle. */
+export function levelHeader(page: Page, name: string): Locator {
+  return level(page, name)
+    .locator('[data-slot="swipe-to-delete"]')
+    .filter({ has: page.getByRole("heading", { level: 2 }) });
+}
+
+/**
+ * The « Supprimer » button a swipe reveals on a level or a logement, named after what it deletes:
+ * `deleteButton(page, "le niveau « R+1 »")`.
+ */
+export function deleteButton(page: Page, what: string): Locator {
+  return page.getByRole("button", { name: `Supprimer ${what}`, exact: true });
+}
+
 /** Levels are listed lowest first, each titled by a level-2 heading. */
 export async function expectLevels(page: Page, names: string[]): Promise<void> {
   await expect(page.getByRole("main").getByRole("heading", { level: 2 })).toHaveText(names);
@@ -312,7 +327,8 @@ const SWIPE_ATTEMPTS = 3;
 type SwipeProbe = { e2eFingerOnRow?: boolean };
 
 /**
- * Swipes `row` to the left with one finger, well past the 40 % of its width that deletes it.
+ * Swipes `row` to the left with one finger, well past the 40 % of its width that deletes it (a
+ * room), or reveals its « Supprimer » button (a level, a logement: see `deleteButton`).
  *
  * Real touch input through the DevTools protocol, as a phone produces it: pointer events of type
  * "touch", with the browser's own hit testing, implicit pointer capture and `touch-action`
@@ -355,8 +371,12 @@ export async function swipeLeft(row: Locator): Promise<void> {
         throw new Error("The finger kept landing outside the row to swipe");
       }
 
+      // One move per frame, as a finger does. Moves sent back to back make a swipe of several
+      // pixels per millisecond: the browser then takes the next tap (on a revealed « Supprimer »)
+      // for one that stops a fling, and sends no click.
       for (let step = 1; step <= SWIPE_STEPS; step++) {
         await touch("touchMove", fromX + ((toX - fromX) * step) / SWIPE_STEPS, y);
+        await nextFrames(page, 1);
       }
       await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
       return;

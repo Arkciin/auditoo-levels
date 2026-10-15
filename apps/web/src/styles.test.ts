@@ -33,10 +33,16 @@ const PAIRINGS: readonly Pairing[] = [
   { where: "main buttons, toast actions", fg: "primary-foreground", bg: "primary", min: TEXT },
   { where: "« Ajouter une pièce », links", fg: "primary", bg: "background", min: TEXT },
   {
-    where: "the strip behind a swiped row",
+    where: "the strip behind a swiped row, the « Supprimer » button it reveals",
     fg: "destructive-foreground",
     bg: "destructive",
     min: TEXT,
+  },
+  {
+    where: "the focus ring of that button",
+    fg: "destructive-foreground",
+    bg: "destructive",
+    min: NON_TEXT,
   },
   { where: "« Supprimer » menu items", fg: "destructive", bg: "popover", min: TEXT },
   {

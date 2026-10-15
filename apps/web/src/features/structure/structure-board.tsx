@@ -395,7 +395,12 @@ function LevelSection({
       data-highlight-id={level.id}
       className={cn("relative scroll-mt-6 pt-5", isDragging && "opacity-40")}
     >
-      <SwipeToDelete onDelete={() => void remove()} disabled={renaming}>
+      {/* A level goes with its rooms: the swipe only reveals a button, deleting takes a tap. */}
+      <SwipeToDelete
+        onDelete={() => void remove()}
+        confirmLabel={`Supprimer le niveau ${quote(level.name)}`}
+        disabled={renaming}
+      >
         {/* The floor line: the datum marker's apex rests on it, as on a building section. */}
         <div className="flex h-12 items-end gap-2 border-b-[1.5px] border-foreground pr-1 pl-4">
           <DatumMarker className="mb-px" />

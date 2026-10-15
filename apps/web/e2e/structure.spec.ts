@@ -1,11 +1,13 @@
 import {
   addLevel,
   createProperty,
+  deleteButton,
   expect,
   expectLevels,
   expectRooms,
   level,
   levelAction,
+  levelHeader,
   moveRoomTo,
   newRoomInput,
   nextFrames,
@@ -91,6 +93,30 @@ test("rename a room in place, undo the deletion of a room or a level", async ({ 
 
     await undo(page, message);
     await expectRooms(page, "RDC", ["Entrée", "Salon", "Cuisine"]);
+  });
+
+  await test.step("swipe a level: it only reveals a button, which a tap elsewhere hides", async () => {
+    await swipeLeft(levelHeader(page, "R+1"));
+    const remove = deleteButton(page, "le niveau « R+1 »");
+    await expect(remove).toBeVisible();
+    await expectLevels(page, ["RDC", "R+1"]);
+
+    await structureSummary(page).tap();
+    await expect(remove).toBeHidden();
+    await expectLevels(page, ["RDC", "R+1"]);
+    await expect(structureSummary(page)).toHaveText("2 niveaux, 5 pièces");
+  });
+
+  await test.step("swipe a level, tap « Supprimer », then undo", async () => {
+    const message = "Niveau « R+1 » supprimé avec ses 2 pièces";
+    await swipeLeft(levelHeader(page, "R+1"));
+    await deleteButton(page, "le niveau « R+1 »").tap();
+    await expect(toast(page, message)).toBeVisible();
+    await expectLevels(page, ["RDC"]);
+
+    await undo(page, message);
+    await expectLevels(page, ["RDC", "R+1"]);
+    await expectRooms(page, "R+1", ["Chambre 1", "Chambre 2"]);
   });
 
   await test.step("delete a level from its menu, then undo", async () => {

@@ -140,13 +140,24 @@ describe("SwipeToDelete", () => {
     expect(onDelete).not.toHaveBeenCalled();
   });
 
-  it("deletes on a quick flick, before the threshold", () => {
+  it("deletes on a quick flick past a quarter of the row, before the threshold", () => {
     const { name, onDelete } = renderRow();
 
-    swipe(name, { toX: 280 - 60, speed: FAST });
+    swipe(name, { toX: 280 - 90, speed: FAST });
     advance(EXIT_MS);
 
     expect(onDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not delete on a quick flick shorter than a quarter of the row", () => {
+    const { name, onDelete } = renderRow();
+
+    // 60 px, about 6 mm on a phone, at 1.9 px/ms: a thumb brushing past, not an intent.
+    swipe(name, { toX: 280 - 60, speed: FAST });
+    advance(RESTORE_MS * 2);
+
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(deleteHint()).not.toBeInTheDocument();
   });
 
   it("does not take a short twitch for a flick", () => {
@@ -303,5 +314,110 @@ describe("SwipeToDelete", () => {
     swipe(name, { toX: 20 });
     advance(EXIT_MS);
     expect(onDelete).toHaveBeenCalledTimes(2);
+  });
+});
+
+/** A level's header: deleting it deletes its rooms too. */
+function renderLevelRow() {
+  const onDelete = vi.fn();
+  const onOpen = vi.fn();
+  render(
+    <>
+      <SwipeToDelete onDelete={onDelete} confirmLabel="Supprimer le niveau « R+1 »">
+        <button type="button" onClick={onOpen}>
+          R+1
+        </button>
+      </SwipeToDelete>
+      <button type="button">Ailleurs</button>
+    </>,
+  );
+  return {
+    onDelete,
+    onOpen,
+    name: screen.getByRole("button", { name: "R+1" }),
+    elsewhere: screen.getByRole("button", { name: "Ailleurs" }),
+  };
+}
+
+const deleteButton = () => screen.queryByRole("button", { name: "Supprimer le niveau « R+1 »" });
+
+describe("SwipeToDelete of a row that deletes a lot (confirmLabel)", () => {
+  it("only reveals a delete button, which deletes on a tap", () => {
+    const { name, onDelete } = renderLevelRow();
+
+    swipe(name, { toX: 20 });
+    advance(RESTORE_MS * 2);
+    expect(onDelete).not.toHaveBeenCalled();
+
+    const button = deleteButton();
+    expect(button).toBeVisible();
+    if (button) tap(button);
+    expect(onDelete).not.toHaveBeenCalled(); // the row slides out first
+    advance(EXIT_MS);
+    expect(onDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it("reveals it on a flick past a quarter of the row, not before the threshold otherwise", () => {
+    const { name, onDelete } = renderLevelRow();
+
+    swipe(name, { toX: 280 - 100 }); // a third of the row, slowly
+    expect(deleteButton()).not.toBeInTheDocument();
+    swipe(name, { toX: 280 - 60, speed: FAST });
+    expect(deleteButton()).not.toBeInTheDocument();
+
+    swipe(name, { toX: 280 - 90, speed: FAST });
+    expect(deleteButton()).toBeVisible();
+    expect(onDelete).not.toHaveBeenCalled();
+  });
+
+  it("hides the button on a tap elsewhere", () => {
+    const { name, elsewhere, onDelete } = renderLevelRow();
+    swipe(name, { toX: 20 });
+
+    pointer("pointerDown", elsewhere, { x: 100, y: 200, t: 10_000 });
+
+    expect(deleteButton()).not.toBeInTheDocument();
+    expect(onDelete).not.toHaveBeenCalled();
+  });
+
+  it("hides the button on a scroll", () => {
+    const { name } = renderLevelRow();
+    swipe(name, { toX: 20 });
+
+    fireEvent.scroll(window);
+
+    expect(deleteButton()).not.toBeInTheDocument();
+  });
+
+  it("hides the button on a swipe back, keeps it on a shorter one", () => {
+    const { name } = renderLevelRow();
+    swipe(name, { toX: 20 });
+
+    swipe(name, { fromX: 100, toX: 140 }); // 40 px back: most of the button still shows
+    expect(deleteButton()).toBeVisible();
+    swipe(name, { fromX: 100, toX: 220 });
+    expect(deleteButton()).not.toBeInTheDocument();
+  });
+
+  it("hides the button on a tap on the row, which does nothing else", () => {
+    const { name, onOpen } = renderLevelRow();
+    swipe(name, { toX: 20 });
+
+    pointer("pointerDown", name, { x: 60, y: 20, t: 10_000 });
+    pointer("pointerUp", name, { x: 60, y: 20, t: 10_080 });
+    tap(name);
+
+    expect(deleteButton()).not.toBeInTheDocument();
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("hides the button on Escape", () => {
+    const { name } = renderLevelRow();
+    swipe(name, { toX: 20 });
+
+    const button = deleteButton();
+    if (button) fireEvent.keyDown(button, { key: "Escape" });
+
+    expect(deleteButton()).not.toBeInTheDocument();
   });
 });
