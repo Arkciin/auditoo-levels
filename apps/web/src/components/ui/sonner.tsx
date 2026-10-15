@@ -24,8 +24,8 @@ const topOffset = "calc(env(safe-area-inset-top) + 0.75rem)";
  * - While a sheet is open, toasts (an error, the update offer) show at the top of the screen,
  *   above its backdrop and clear of the sheet, and take taps themselves (styles.css); a tap on
  *   one leaves the sheet open (`DrawerContent`).
- * - One toast per entity: a deletion's undo toast and the « restauré » toast that follows share
- *   the entity's id (`toastUndo`, `toastRestored`), so the one replaces the other.
+ * - One toast per entity: an undo toast given the deleted entity's id (`toastUndo`) and the
+ *   « restauré » toast that follows (`toastRestored`) share it, so the one replaces the other.
  */
 
 /** The toasts that opening a sheet leaves on screen: the update offer (main.tsx). */
