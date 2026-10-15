@@ -659,13 +659,15 @@ function SpaceRow({
       <SwipeToDelete onDelete={() => void remove()} disabled={renaming}>
         {/* gap-2, as in the level header: the ⋮ buttons line up in one column. */}
         <div className="flex h-12 items-center gap-2 border-b border-rule pr-1 pl-10">
+          {/* The focus ring drawn inside, as the row clips what overflows it (SwipeToDelete), and
+              clear of the text: the button reaches into the gutter, the text stays aligned. */}
           <EditableText
             value={space.name}
             label="Nom de la pièce"
             editing={renaming}
             onEditingChange={setRenaming}
             onSave={rename}
-            className="h-full flex-1"
+            className="-ml-2 h-full flex-1 pl-2 -outline-offset-2"
             inputClassName="h-9"
           />
           {/* Every action without a gesture (keyboard, screen reader, one thumb): the menu. */}
