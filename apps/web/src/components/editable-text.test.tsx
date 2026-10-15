@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { deferred } from "@/sync/test-support/fixtures";
-import { EditableText } from "./editable-text";
+import { EditableText, RenameHint } from "./editable-text";
 
 type Save = (next: string) => Promise<void> | void;
 
@@ -57,13 +57,25 @@ async function rename(user: ReturnType<typeof userEvent.setup>, text: string) {
 describe("EditableText", () => {
   it("is named by its text alone, as is a heading around it; renaming is its description", () => {
     render(
-      <h2>
-        <RoomName onSave={vi.fn()} />
-      </h2>,
+      <>
+        <h2>
+          <RoomName onSave={vi.fn()} />
+        </h2>
+        <h2>
+          <RoomName onSave={vi.fn()} />
+        </h2>
+        <RenameHint />
+      </>,
     );
 
-    expect(screen.getByRole("heading", { name: "Cuisine" })).toHaveTextContent(/^Cuisine$/);
-    expect(nameButton("Cuisine")).toHaveAccessibleDescription("Renommer");
+    for (const heading of screen.getAllByRole("heading", { name: "Cuisine" })) {
+      expect(heading).toHaveTextContent(/^Cuisine$/);
+    }
+    for (const name of screen.getAllByRole("button", { name: "Cuisine" })) {
+      expect(name).toHaveAccessibleDescription("Renommer");
+    }
+    // One description for every name, not one more element in the page per name.
+    expect(document.querySelectorAll("[hidden]")).toHaveLength(1);
   });
 
   it("turns into a focused field, its text selected, when the name is tapped", async () => {

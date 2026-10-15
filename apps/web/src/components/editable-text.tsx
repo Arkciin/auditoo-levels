@@ -1,6 +1,5 @@
 import { NAME_MAX_LENGTH } from "@repo/shared";
-import { useEffect, useId, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -43,7 +42,6 @@ export function EditableText({
   const buttonRef = useRef<HTMLButtonElement>(null);
   const committing = useRef(false);
   const wasEditing = useRef(editing);
-  const hintId = useId();
   /** What the open field holds once typed in; null while it is closed or untouched. */
   const draft = useRef<string | null>(null);
   /** The latest props, for the cleanup on unmount: its closure holds the first render's. */
@@ -137,28 +135,31 @@ export function EditableText({
 
   // Named by the text alone: a heading around it (a level, the logement) takes its name from it,
   // and must read « RDC », not « RDC, renommer ». What a tap does is its description, kept out
-  // of the page, where it would add to the text of the heading or the row.
+  // of the heading or the row, whose text it would add to: see RenameHint.
   return (
-    <>
-      <button
-        ref={buttonRef}
-        type="button"
-        data-slot="editable-text"
-        className={cn("min-w-0 truncate text-left", className)}
-        aria-describedby={hintId}
-        onClick={() => setEditing(true)}
-      >
-        {value}
-      </button>
-      {createPortal(
-        <span id={hintId} hidden>
-          {RENAME_HINT}
-        </span>,
-        document.body,
-      )}
-    </>
+    <button
+      ref={buttonRef}
+      type="button"
+      data-slot="editable-text"
+      className={cn("min-w-0 truncate text-left", className)}
+      aria-describedby={RENAME_HINT_ID}
+      onClick={() => setEditing(true)}
+    >
+      {value}
+    </button>
   );
 }
 
-/** The accessible description of a name that turns into a field. */
-const RENAME_HINT = "Renommer";
+const RENAME_HINT_ID = "rename-hint";
+
+/**
+ * « Renommer », the accessible description of every name that turns into a field. Rendered once,
+ * out of sight, by the root route (and by the tests that check it), rather than once per name.
+ */
+export function RenameHint() {
+  return (
+    <span id={RENAME_HINT_ID} hidden>
+      Renommer
+    </span>
+  );
+}
