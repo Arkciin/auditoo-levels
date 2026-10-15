@@ -226,6 +226,12 @@
   font-family: inherit;
 }
 
+/* A toast takes its taps even while a modal sheet makes the page inert (`pointer-events: none` on
+   body): never through it, to what lies under it. Not the hidden ones of a long stack. */
+[data-sonner-toaster] [data-sonner-toast]:not([data-visible="false"]) {
+  pointer-events: auto;
+}
+
 [data-sonner-toaster] [data-sonner-toast][data-styled="true"] {
   gap: 0.75rem;
   padding: 0.75rem 1rem;

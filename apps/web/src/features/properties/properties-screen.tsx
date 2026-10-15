@@ -166,9 +166,11 @@ function PropertyRow({ summary }: { summary: PropertySummary }) {
 
   async function remove() {
     if (await safeMutate("deleteProperty", { id: property.id })) {
-      toastUndo(`Logement ${quote(property.name)} supprimé`, () => {
-        void safeMutate("restoreProperty", { id: property.id });
-      });
+      toastUndo(
+        `Logement ${quote(property.name)} supprimé`,
+        () => void safeMutate("restoreProperty", { id: property.id }),
+        property.id,
+      );
     }
   }
 

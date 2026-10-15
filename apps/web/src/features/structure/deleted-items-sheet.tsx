@@ -1,6 +1,5 @@
 import type { Snapshot } from "@repo/shared";
 import { useCallback, useId, useState } from "react";
-import { toast } from "sonner";
 
 import { DeletedRow, deletedDetails, NothingDeleted } from "@/components/deleted-row";
 import {
@@ -11,7 +10,7 @@ import {
   DrawerTitle,
   useHeldWhileClosing,
 } from "@/components/ui/drawer";
-import { quote, useSafeMutate } from "@/features/use-safe-mutate";
+import { quote, toastRestored, useSafeMutate } from "@/features/use-safe-mutate";
 import { plural } from "@/lib/suggestions";
 import { useView } from "@/sync";
 import { type DeletedLevel, type DeletedSpace, selectDeletedStructure } from "@/sync/selectors";
@@ -66,14 +65,14 @@ function DeletedItems({
   async function restoreLevel({ level, spaceCount }: DeletedLevel) {
     onRestore();
     if (await safeMutate("restoreLevel", { id: level.id })) {
-      toast.success(`Niveau ${quote(level.name)} restauré${withRooms(spaceCount)}`);
+      toastRestored(`Niveau ${quote(level.name)} restauré${withRooms(spaceCount)}`, level.id);
     }
   }
 
   async function restoreSpace({ space }: DeletedSpace) {
     onRestore();
     if (await safeMutate("restoreSpace", { id: space.id })) {
-      toast.success(`Pièce ${quote(space.name)} restaurée`);
+      toastRestored(`Pièce ${quote(space.name)} restaurée`, space.id);
     }
   }
 

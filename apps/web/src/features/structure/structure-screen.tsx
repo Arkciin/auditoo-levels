@@ -79,9 +79,11 @@ export function StructureScreen({ propertyId }: { propertyId: string }) {
     // A replace, unlike going back, stays within this document whatever the history holds (after
     // a reload, the list's entry belongs to the previous one), so the undo toast survives it.
     await router.navigate({ to: "/", replace: true });
-    toastUndo(`Logement ${quote(propertyName)} supprimé`, () => {
-      void safeMutate("restoreProperty", { id: propertyId });
-    });
+    toastUndo(
+      `Logement ${quote(propertyName)} supprimé`,
+      () => void safeMutate("restoreProperty", { id: propertyId }),
+      propertyId,
+    );
   }
 
   async function quickAdd(name: string) {

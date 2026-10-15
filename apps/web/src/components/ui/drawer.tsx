@@ -2,10 +2,30 @@ import type * as React from "react";
 import { useState } from "react";
 import { Drawer as DrawerPrimitive } from "vaul";
 
+import { useToastsMakeWay } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
 
-function Drawer({ ...props }: React.ComponentProps<typeof DrawerPrimitive.Root>) {
-  return <DrawerPrimitive.Root data-slot="drawer" {...props} />;
+function Drawer({
+  open,
+  defaultOpen,
+  onOpenChange,
+  ...props
+}: React.ComponentProps<typeof DrawerPrimitive.Root>) {
+  // A sheet without `open` (uncontrolled) is followed through `onOpenChange`.
+  const [openedHere, setOpenedHere] = useState(defaultOpen ?? false);
+  useToastsMakeWay(open ?? openedHere);
+  return (
+    <DrawerPrimitive.Root
+      data-slot="drawer"
+      open={open}
+      defaultOpen={defaultOpen}
+      onOpenChange={(next) => {
+        setOpenedHere(next);
+        onOpenChange?.(next);
+      }}
+      {...props}
+    />
+  );
 }
 
 /**
@@ -69,6 +89,7 @@ function DrawerOverlay({
 function DrawerContent({
   className,
   children,
+  onPointerDownOutside,
   ...props
 }: React.ComponentProps<typeof DrawerPrimitive.Content>) {
   return (
@@ -76,6 +97,14 @@ function DrawerContent({
       <DrawerOverlay />
       <DrawerPrimitive.Content
         data-slot="drawer-content"
+        onPointerDownOutside={(event) => {
+          onPointerDownOutside?.(event);
+          // A toast shows over the backdrop while a sheet is open (see sonner.tsx): a tap on it
+          // is for the toast, not a tap beside the sheet that closes it.
+          if (event.target instanceof Element && event.target.closest("[data-sonner-toaster]")) {
+            event.preventDefault();
+          }
+        }}
         className={cn(
           "group/drawer-content fixed z-50 flex h-auto flex-col bg-card text-card-foreground",
           "data-[vaul-drawer-direction=top]:inset-x-0 data-[vaul-drawer-direction=top]:top-0 data-[vaul-drawer-direction=top]:mb-24 data-[vaul-drawer-direction=top]:max-h-[85dvh] data-[vaul-drawer-direction=top]:rounded-b-xl data-[vaul-drawer-direction=top]:border-b data-[vaul-drawer-direction=top]:pt-safe",
