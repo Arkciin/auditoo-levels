@@ -1,4 +1,4 @@
-import { type ReactNode, type Ref, useEffect, useState } from "react";
+import { type ReactNode, type Ref, useCallback, useEffect, useState } from "react";
 
 import { OfflineBanner } from "@/features/sync-status/offline-banner";
 import { SyncIndicator } from "@/features/sync-status/sync-indicator";
@@ -16,8 +16,19 @@ export function AppHeader({
   title: ReactNode;
   actions?: ReactNode;
 }) {
+  const [header, setHeader] = useState<HTMLElement | null>(null);
+  const headerRef = useCallback(
+    (node: HTMLElement | null) => {
+      setHeader(node);
+      if (typeof ref === "function") ref(node);
+      else if (ref) ref.current = node;
+    },
+    [ref],
+  );
+  useHeaderHeight(header);
+
   return (
-    <header ref={ref} className="sticky top-0 z-20 bg-background pt-safe">
+    <header ref={headerRef} className="sticky top-0 z-20 bg-background pt-safe">
       <div className="flex h-14 items-center gap-1 border-b border-rule pr-2 pl-1">
         {leading}
         <div className={cn("flex min-w-0 flex-1 items-center", leading ? "" : "pl-3")}>{title}</div>
@@ -27,6 +38,25 @@ export function AppHeader({
       <OfflineBanner />
     </header>
   );
+}
+
+/**
+ * Keeps `--header-height` (styles.css) at the header's height, offline banner included, so that
+ * what a screen scrolls into view lands clear of it: the banner takes one line or more.
+ */
+function useHeaderHeight(header: HTMLElement | null): void {
+  useEffect(() => {
+    if (!header) return;
+    const root = document.documentElement;
+    const observer = new ResizeObserver(() => {
+      root.style.setProperty("--header-height", `${header.getBoundingClientRect().height}px`);
+    });
+    observer.observe(header);
+    return () => {
+      observer.disconnect();
+      root.style.removeProperty("--header-height");
+    };
+  }, [header]);
 }
 
 /**
