@@ -160,6 +160,29 @@ test("the room suggestions stay within reach as rooms pile up above them", async
   }
 });
 
+test("quick taps at one spot on a suggestion add as many rooms; the field keeps the focus", async ({
+  page,
+}) => {
+  // A new logement: a short page, which the rooms added lengthen.
+  await createProperty(page, uniqueName("Maison"));
+  await addLevel(page, "R+1");
+  const field = newRoomInput(page, "R+1");
+  const chip = roomSuggestion(page, "R+1", "Chambre");
+  await chip.hover({ trial: true }); // visible and still: the new level has scrolled into view
+  const box = await chip.boundingBox();
+  if (!box) throw new Error("The « Chambre » suggestion is not visible");
+
+  // Where the thumb found the chip, without waiting for the rooms to appear.
+  for (let tap = 1; tap <= 4; tap++) {
+    await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+  }
+
+  await expectRooms(page, "R+1", ["Chambre 1", "Chambre 2", "Chambre 3", "Chambre 4"]);
+  // The chip stayed under the thumb, and the field kept the focus (on a phone, the keyboard).
+  expect((await chip.boundingBox())?.y).toBeCloseTo(box.y, 0);
+  await expect(field).toBeFocused();
+});
+
 test("act on a room from its menu: move it to another level, rename it, delete it", async ({
   page,
 }) => {
