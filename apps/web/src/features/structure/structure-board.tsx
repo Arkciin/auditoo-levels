@@ -63,7 +63,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { quote, toastUndo, useSafeMutate } from "@/features/use-safe-mutate";
 import { haptic } from "@/lib/haptics";
-import { plural } from "@/lib/suggestions";
+import { howManyRooms } from "@/lib/suggestions";
 import { cn } from "@/lib/utils";
 import { isLevelLive, isSpaceLive, type LevelStructure, useSyncClient, withRooms } from "@/sync";
 import { AddSpace } from "./add-space";
@@ -506,7 +506,7 @@ function LevelSection({
             </h2>
             {renaming ? null : (
               <span className="shrink-0 text-sm text-muted-foreground tabular-nums">
-                {plural(spaces.length, "pièce", "pièces")}
+                {howManyRooms(spaces.length)}
               </span>
             )}
           </div>
@@ -806,7 +806,7 @@ function DragPreview({
         <DatumMarker className="mb-px" />
         <span className="flex-1 truncate pb-1.5 text-lg font-bold">{level.name}</span>
         <span className="pb-2 text-sm text-muted-foreground tabular-nums">
-          {plural(containers[level.id]?.length ?? 0, "pièce", "pièces")}
+          {howManyRooms(containers[level.id]?.length ?? 0)}
         </span>
         <PreviewButtons />
       </div>

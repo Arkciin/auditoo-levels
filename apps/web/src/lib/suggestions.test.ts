@@ -3,6 +3,7 @@ import {
   duplicateLevelIndex,
   duplicateLevelName,
   duplicateSpaceNames,
+  howManyRooms,
   levelInsertIndex,
   levelRank,
   levelsAndRooms,
@@ -174,5 +175,11 @@ describe("levelsAndRooms", () => {
     [3, 12, "3 niveaux, 12 pièces"],
   ])("%i levels and %i rooms read « %s »", (levels, rooms, expected) => {
     expect(levelsAndRooms(levels, rooms)).toBe(expected);
+  });
+});
+
+describe("howManyRooms", () => {
+  it("says « aucune pièce » rather than « 0 pièce »", () => {
+    expect([0, 1, 3].map(howManyRooms)).toEqual(["aucune pièce", "1 pièce", "3 pièces"]);
   });
 });
