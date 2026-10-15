@@ -28,6 +28,68 @@ import { idSchema, levelSchema, propertySchema, spaceSchema, timestampSchema } f
 
 export const MAX_MUTATIONS_PER_PUSH = 100;
 
+/**
+ * Largest request body the server accepts (`bodyLimit`, `apps/server/src/app.ts`). A push refused
+ * for its size would be retried as it is, forever: devices stay far below (`MAX_PUSH_BYTES`).
+ */
+export const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Most bytes of JSON a device puts in one push: an eighth of the server's limit, and quick to
+ * upload within the request timeout even on a weak mobile link (8 s at 1 Mbit/s). A device does
+ * not queue a mutation that would not fit a push of its own (`takePushBatch` never splits one).
+ */
+export const MAX_PUSH_BYTES = 1024 * 1024;
+
+/** Size in bytes of `value` as a JSON body: `JSON.stringify` encoded in UTF-8, as `fetch` sends it. */
+export function jsonBytes(value: unknown): number {
+  const json = JSON.stringify(value);
+  let bytes = 0;
+  for (let index = 0; index < json.length; index++) {
+    const code = json.charCodeAt(index);
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code >= 0xd800 && code < 0xdc00) {
+      // A surrogate pair, one 4-byte character (`JSON.stringify` escapes lone surrogates).
+      bytes += 4;
+      index += 1;
+    } else bytes += 3;
+  }
+  return bytes;
+}
+
+/**
+ * The mutations, oldest first, that the next push of `envelope` carries: as many of `mutations`
+ * as `MAX_MUTATIONS_PER_PUSH` and `maxBytes` of JSON allow, and always the first one.
+ */
+export function takePushBatch(
+  envelope: Omit<PushRequest, "mutations">,
+  mutations: readonly Mutation[],
+  maxBytes = MAX_PUSH_BYTES,
+): Mutation[] {
+  // `{…,"mutations":[]}`, then each mutation and the comma before it: exactly the body's size.
+  let bytes = jsonBytes({ ...envelope, mutations: [] });
+  const batch: Mutation[] = [];
+  for (const mutation of mutations.slice(0, MAX_MUTATIONS_PER_PUSH)) {
+    bytes += jsonBytes(mutation) + (batch.length > 0 ? 1 : 0);
+    if (batch.length > 0 && bytes > maxBytes) break;
+    batch.push(mutation);
+  }
+  return batch;
+}
+
+/**
+ * Thrown by a device asked for a mutation that would not fit a push of its own: queued, it could
+ * never reach the server. The message is user-facing (French).
+ */
+export class MutationTooLargeError extends Error {
+  override readonly name = "MutationTooLargeError";
+
+  constructor() {
+    super("Cette modification est trop volumineuse pour être envoyée au serveur.");
+  }
+}
+
 /** Per-device sequence number of a mutation, strictly increasing (gaps allowed). */
 const mutationIdSchema = z.number().int().positive();
 
@@ -69,6 +131,39 @@ export function applyMutation(tx: MutatorTx, mutation: Mutation): Promise<void> 
     ctx: MutationContext,
   ) => Promise<void>;
   return run(tx, mutation.args, { timestamp: mutation.timestamp });
+}
+
+/** Verdicts of {@link isReadable}, per mutation object. */
+const readable = new WeakMap<Mutation, boolean>();
+
+/**
+ * Whether this version can run, and read field by field, a mutation of a device's outbox: it
+ * follows today's `mutationSchema`. The outbox may hold entries another version of the app wrote,
+ * under other rules: an older one, or a newer one (then rolled back, or in another tab). Those
+ * stay queued for the server to judge, but the device neither replays nor describes them. Cached
+ * per object: a device replays its queue at every pull.
+ */
+export function isReadable(mutation: Mutation): boolean {
+  let verdict = readable.get(mutation);
+  if (verdict === undefined) {
+    verdict = mutationSchema.safeParse(mutation).success;
+    readable.set(mutation, verdict);
+  }
+  return verdict;
+}
+
+/**
+ * An outbox entry as this version reads it: parsed, hence normalized the way the server will apply
+ * it, or, when it breaks today's rules, as it is, which {@link isReadable} then says.
+ */
+export function readStoredMutation(entry: Mutation): Mutation {
+  const parsed = mutationSchema.safeParse(entry);
+  if (!parsed.success) {
+    readable.set(entry, false);
+    return entry;
+  }
+  readable.set(parsed.data, true);
+  return parsed.data;
 }
 
 /**
@@ -139,6 +234,40 @@ export const pushResponseSchema = z.object({
     .default(() => []),
 });
 export type PushResponse = z.infer<typeof pushResponseSchema>;
+
+/**
+ * The `poke` event the server sends to every connected device after a push that changed data.
+ * Devices only use it as a signal to pull, and ignore what they do not know: fields can be added.
+ */
+export interface Poke {
+  /** The server version after the push. */
+  readonly version: number;
+  /** {@link clientTag} of the device that pushed (absent from servers older than the field). */
+  readonly clientTag?: string;
+}
+
+/** WebCrypto's digest, which browsers (in secure contexts) and Node both provide. */
+interface Digest {
+  digest(algorithm: "SHA-256", data: Uint8Array): Promise<ArrayBuffer>;
+}
+
+/**
+ * Names the device behind a poke without disclosing its client id: the first 16 bytes of the
+ * id's SHA-256, in hex. A device skips the pokes of its own pushes (it pulls right after pushing
+ * anyway). Not the id itself: anyone can listen to the event stream, and a client id is all it
+ * takes to push as that device; a forged push with a high mutation id would make the server skip
+ * that device's later changes, silently and for good. Rejects where WebCrypto is unavailable
+ * (a page served over plain HTTP from another host than localhost).
+ */
+export async function clientTag(clientId: string): Promise<string> {
+  // Typing boundary: this package builds without DOM or Node typings, both runtimes have it.
+  const subtle = (globalThis as { crypto?: { subtle?: Digest } }).crypto?.subtle;
+  if (!subtle) throw new Error("WebCrypto is unavailable");
+  // Client ids are UUIDs: ASCII.
+  const bytes = Uint8Array.from(clientId, (character) => character.charCodeAt(0));
+  const digest = new Uint8Array(await subtle.digest("SHA-256", bytes));
+  return Array.from(digest.subarray(0, 16), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 export const pullRequestSchema = z.object({
   clientId: idSchema,

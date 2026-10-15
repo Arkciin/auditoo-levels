@@ -1,4 +1,6 @@
-export type PokeListener = (version: number) => void;
+import type { Poke } from "@repo/shared";
+
+export type PokeListener = (poke: Poke) => void;
 
 /**
  * In-process pub/sub telling connected devices that the server version changed, so that they
@@ -18,7 +20,7 @@ export class Pokes {
     };
   }
 
-  publish(version: number): void {
-    for (const listener of this.listeners) listener(version);
+  publish(poke: Poke): void {
+    for (const listener of this.listeners) listener(poke);
   }
 }

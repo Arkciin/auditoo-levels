@@ -71,6 +71,8 @@ class RecordingTx extends SnapshotTx {
 export class MemoryServer {
   /** Mutations processed but rejected (invalid, or refused by their mutator), in order. */
   readonly rejected: MutationEnvelope[] = [];
+  /** Why mutators refused mutations: their `MutationRejectedError` messages, in order. */
+  readonly refusals: string[] = [];
   /**
    * Mutations skipped as already processed although this database never processed them: lost
    * for good. Must stay empty; a device pushing out of order, or to the wrong epoch, fills it.
@@ -104,9 +106,10 @@ export class MemoryServer {
         this.rejections.get(request.clientId) ?? new Map<number, RejectionReason>();
       this.rejections.set(request.clientId, rejections);
       const rejected: PushResponse["rejected"] = [];
-      // In id order, each id once, like the server.
-      const envelopes = request.mutations
-        .toSorted((a, b) => a.id - b.id)
+      // In id order, each id once, like the server. (Not `toSorted`: the app's sources, these
+      // included, compile against ES2022, its build target.)
+      const envelopes = [...request.mutations]
+        .sort((a, b) => a.id - b.id)
         .filter((envelope, index, sorted) => envelope.id !== sorted[index - 1]?.id);
       for (const envelope of envelopes) {
         if (envelope.id <= lastMutationId) {
@@ -202,8 +205,9 @@ export class MemoryServer {
     try {
       await applyMutation(tx, mutation);
     } catch (error) {
-      if (error instanceof MutationRejectedError) return "not_applicable";
-      throw error;
+      if (!(error instanceof MutationRejectedError)) throw error;
+      this.refusals.push(error.message);
+      return "not_applicable";
     }
     this.commit(tx);
     return undefined;

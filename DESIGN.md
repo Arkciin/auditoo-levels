@@ -102,7 +102,7 @@ SQL: `apps/server/src/db/migrations.ts`; shapes: `packages/shared/src/schemas.ts
 | **Soft deletes** (`deletedAt`) | A delete is a row change like any other, so it syncs through the same cursor, and undo is just a `restore*` mutation. Deleting a level hides its rooms without touching them; restoring it brings them all back. |
 | **Epoch-ms `bigint` timestamps, taken from the mutation** | Mutators are deterministic, so server rows are identical to what the device computed optimistically and the next pull changes nothing on screen (asserted in `apps/server/src/sync/sync.test.ts`). The price: `createdAt` and `deletedAt` come from device clocks, which only drive display order. |
 | **`position text COLLATE "C"`** | Fractional keys compare by code unit (see [Ordering](#ordering-with-fractional-indexes)). |
-| **Names: 1 to 80 characters, no control characters** | Validated on input by `nameSchema` (French messages); the length is also a SQL `CHECK`. Rows read back use a looser schema: if input rules tighten later, a row stored under the old rules must never make a pull fail and block a device. |
+| **Names: 1 to 80 characters, no control characters, no half emoji** | Validated on input by `nameSchema` (French messages); the length is also a SQL `CHECK`. A lone UTF-16 surrogate has no UTF-8 form: the database would store U+FFFD, and the server's row would differ from the device's. Rows read back use a looser schema: if input rules tighten later, a row stored under the old rules must never make a pull fail and block a device. |
 | **Foreign keys** `levels → properties`, `spaces → levels` | The database guards the tree, even against a buggy mutator. |
 
 ## Sync strategy
@@ -112,8 +112,13 @@ The model is Replicache's (push, pull, rebase), written as plain, readable TypeS
 ```text
 POST /api/push  { clientId, epoch?, mutations: [{ id, name, args, timestamp }] }  →  { lastMutationId, epoch, rejected: [{ id, reason }] }
 POST /api/pull  { clientId, cursor }  →  { epoch, cursor, lastMutationId, reset, changes: { properties, levels, spaces } }
-GET  /api/events    server-sent events: "poke" { version } after each push that changed data
+GET  /api/events    server-sent events: "poke" { version, clientTag } after each push that changed data
 ```
+
+A poke names the device that pushed by `clientTag`, the start of its client id's SHA-256: that
+device skips it, since it pulls right after pushing. Not the id itself: anyone can listen to the
+stream, and a client id is all it takes to push as a device (a forged high mutation id would make
+the server skip that device's later changes). Installed apps ignore the field.
 
 ### Isomorphic mutators
 
@@ -157,11 +162,12 @@ acknowledgement alone. State transitions are serialized: none can lose or double
 
 ### Push: ordered, idempotent, never blocked
 
-The device sends its outbox oldest first, in batches of up to 100. The server accepts bodies up to
-8 MiB, which the largest valid push fits (100 copies of 100-room levels with the costliest names,
-about 6.5 MiB, checked by `apps/server/src/app.test.ts`): a push refused for its size would be
-retried as it is, forever. `apps/server/src/sync/push.ts` gives **each mutation its own
-transaction**:
+The device sends its outbox oldest first, in pushes of at most 100 mutations and 1 MiB of JSON
+(`MAX_PUSH_BYTES`), an eighth of the 8 MiB the server accepts: a push refused for its size would be
+retried as it is, forever. `mutate()` refuses a mutation that would not fit a push of its own, so
+no future mutation can block a queue; today's largest, a 100-room copy with the costliest names,
+takes 44 KB (`apps/server/src/app.test.ts`). `apps/server/src/sync/push.ts` gives **each mutation
+its own transaction**:
 
 1. `SELECT version, epoch FROM server_meta … FOR UPDATE`: take the version lock, check the epoch.
 2. Skip the mutation if `id ≤ clients.last_mutation_id`: retries are no-ops; ids may have gaps.
@@ -218,8 +224,11 @@ pas pu être déplacée vers « R+1 » : le niveau n'existe plus. ».
 - **Other tabs** only see the mutation leave the outbox: the tab that reports a rejection tells
   them over the BroadcastChannel.
 - **At startup**, queued changes that no longer apply are listed but not announced: old news.
-- **Mutations of unknown kinds**, which a newer version of the app may have left in the outbox
-  (then rolled back, or in another tab), are refused like any other instead of failing the replay.
+- **Queued mutations this version cannot read**, which another version of the app may have left in
+  the outbox (an unknown kind from a newer one, then rolled back or in another tab; arguments
+  breaking rules that tightened since), are validated when the outbox is loaded and not run. They,
+  and any other failure of the local replay, mean "does not apply here": listed, kept for the
+  server to judge, never a reason for the app not to start.
 
 ### Replaced databases: reset and epoch
 
@@ -237,13 +246,18 @@ pas pu être déplacée vers « R+1 » : le niveau n'existe plus. ».
 | Trigger | Behaviour |
 | --- | --- |
 | A local mutation | Sync now; while a retry is scheduled, wait for it: the mutation is safe in the outbox, and says nothing about the network |
-| An SSE `poke`, every (re)connection of the stream (pokes sent meanwhile are lost), the page becoming visible | Sync now, even while backing off: the server just proved reachable, or the user is back |
+| An SSE `poke`, every (re)connection of the stream (pokes sent meanwhile are lost), the page becoming visible | Sync now, even while backing off: the server just proved reachable, or the user is back. Not for the poke of the device's own push, unless backing off: its other tabs hear of it over the BroadcastChannel |
 | `online` event, "Synchroniser maintenant" button | Sync now and reset the backoff |
 | Every 30 s while the page is visible | Sync, unless a retry is already scheduled; reopen the event stream if it gave up |
 | A failed cycle | Retry after 1 s, doubling up to 30 s, ±20 % jitter so devices cut off together do not retry in lockstep |
 
 A cycle is push then pull, each request bounded by a 15 s timeout (weak mobile networks hang rather
-than fail). A `NetworkError` means offline, a normal state; HTTP and protocol errors show as errors.
+than fail), or a minute for the first request after 10 minutes without an answer: a sleeping Render
+instance takes that long to wake, and 15 s would report every cold start as a failure
+(`transport.ts`). A request that fails or times out while the browser reports a network shows as
+« Serveur injoignable », with a countdown to the retry in the sync sheet; « Hors ligne » is kept for
+`navigator.onLine === false`, the only case of the offline banner. Neither is an error; HTTP and
+protocol errors are.
 
 ### Several tabs and durability
 
@@ -270,6 +284,7 @@ than fail). A `NetworkError` means offline, a normal state; HTTP and protocol er
 | Duplicate a level another device deleted or changed meanwhile | The copy is what the user saw; the source stays as the other device left it | The rooms travel in the mutation; a copy reads its source, it does not edit it |
 | Delete an already deleted item | No-op, no version bump | Idempotent |
 | Move a room to another logement | Rejected | A room belongs to one dwelling; drag and drop never offers it |
+| A create reusing an id that exists, deleted or not (a copy's rooms included) | Rejected, on device and server alike | It would overwrite the entity: a `createSpace` could move a room to another logement. In normal operation a create is judged once, against a state that cannot hold its id (`mutators.ts`): only a faulty client reuses one |
 | Mutation on an entity the server does not know | Rejected, acknowledged, reported to the user (toast, sync sheet), dropped at the next pull | Only after a database wipe, or from a buggy client |
 
 ## Ordering with fractional indexes
@@ -352,7 +367,7 @@ that the list stays strictly ordered with valid keys; 500 appends keep keys at 8
 | **Smart numbering** | "Chambre" is always numbered (Chambre 1, Chambre 2…); other rooms only when they repeat (Cuisine, then Cuisine 2), counted across the whole logement (`apps/web/src/lib/suggestions.ts`). |
 | **Levels go where they belong** | French level names are ranked (Sous-sol below RDC, R+n or "2e étage" above, Combles on top), so a Sous-sol added after the RDC is inserted below it; unknown names go last. The sheet offers the likely next levels in one tap. |
 | **Undo instead of "Are you sure?"** | Deletes are soft, so each one shows a 6 s toast with "Annuler", which queues a `restore*` mutation (offline too). A confirmation dialog would tax every delete to protect the rare mistake. |
-| **Sync status always in view** | A header pill (À jour, En attente with a count, Envoi…, Hors ligne, Erreur) opens a sheet listing pending changes in plain French, with a "Synchroniser maintenant" button; a banner says what happens to work done offline. |
+| **Sync status always in view** | A header pill (À jour, En attente with a count, Envoi…, Hors ligne, Serveur injoignable, Erreur) opens a sheet listing pending changes in plain French, with a "Synchroniser maintenant" button; a banner says what happens to work done offline. « Envoi… » only while the user's own changes are on their way: the periodic pull and pokes stay silent. The pill's accessible name starts with what it shows (« Hors ligne, 14 modifications en attente »), so that speech input finds it by its words. |
 | **No silent rejection** | A change the server refuses, or that no longer applies, gets an error toast saying which and why, and stays listed in the sync sheet ("modifications non appliquées"), whose relative times keep ticking while it is open. |
 | **Legibility on site** | Atkinson Hyperlegible Next, designed by the Braille Institute for low-vision readers, for dim basements and glare; 16 px body text; one brand colour (forest `#033527`) and one accent; field outlines at 3:1 contrast. |
 | **Touch hygiene and comfort** | 44 px minimum targets; 16 px inputs (iOS zooms into smaller ones); safe-area padding; no pull-to-refresh to fight a drag; light haptics where the Vibration API exists. Dark mode follows the OS; with `prefers-reduced-motion`, animations are shortened rather than removed, so components waiting for `animationend` still close. |
@@ -378,7 +393,8 @@ that the list stays strictly ordered with valid keys; 500 appends keep keys at 8
 - **One PostgreSQL** `releve-db` (free plan, Frankfurt, the closest region to France), reachable
   only from Render's private network; `DATABASE_URL` is injected.
 - **Cold starts.** Free instances sleep after 15 idle minutes and take up to a minute to wake.
-  Offline-first absorbs it: the app opens from the service worker and IndexedDB and syncs later.
+  Offline-first absorbs it: the app opens from the service worker and IndexedDB and syncs later,
+  its first request after a silence given a minute rather than 15 s.
   `.github/workflows/keep-warm.yml` pings `/api/health` every 10 minutes once `APP_URL` is set.
 - **Restoring a backup** replaces the database: draw a new epoch right after
   (`UPDATE server_meta SET epoch = gen_random_uuid();`) so that devices start over from it.
@@ -404,7 +420,8 @@ hold exactly the server's state with an empty outbox, no mutation may be lost or
 device may have reported a change as not applying; invariants must hold (parents exist, positions
 valid, no room left its logement), and all 15 mutation kinds must have run. Four more seeds also
 wipe the server's database twice: there, every mutation the final database rejected must have
-been reported to its device, lost responses and restarts included.
+been reported to its device, lost responses and restarts included. In all of them, no create may
+ever have met an existing id, on the server or on a device.
 
 The server was also checked by hand against PostgreSQL 16: concurrent migrations, 12 devices × 25
 mutations racing two server instances, gapless versions; and the whole end-to-end suite passes
@@ -448,11 +465,10 @@ budget and end-to-end tests on every push.
 - **A change reported as no longer applying may still reach the server**: after a database
   replacement, if another device pushes again the entity it needed. It then reappears; rare, and
   nothing is lost. No conflict UI beyond the message: re-doing the change is up to the user.
-- **Pushes are capped in count, not in bytes**: the body limit holds for today's largest mutation
-  (tested). Next: the device also caps each push in bytes, so that no future mutation can outgrow it.
-- **A level copy takes one SQL statement per room**, all while holding the version lock: a push of
-  a 100-room copy takes about 60 ms on PGlite (measured over HTTP), more with network round trips
-  to PostgreSQL. Next, if levels grow: a batched `putSpaces` on `ServerTx`.
+- **A level copy takes one SQL statement per room**, all while holding the version lock (checking
+  that none of their ids exists takes one read for them all): a push of a 100-room copy takes 60 to
+  90 ms on PGlite (measured over HTTP), more with network round trips to PostgreSQL. Next, if
+  levels grow: a batched `putSpaces` on `ServerTx`.
 - **Long levels are dragged whole**: an earlier version collapsed every level during a level drag,
   but the layout shift moved dnd-kit's measured rect and the floating copy drifted away from the
   finger (caught by an e2e test). Collapsing again needs a modifier that re-anchors the overlay.

@@ -192,6 +192,29 @@ describe("describePendingMutations", () => {
   });
 });
 
+describe("a queued change this version cannot read", () => {
+  // Typing boundary: a known kind, with arguments another version of the app wrote.
+  const unreadable = {
+    id: 99,
+    timestamp: 1,
+    name: "renameSpace",
+    args: null,
+  } as unknown as Mutation;
+
+  it("is described as such, its fields never read", () => {
+    const otherVersion = "Modification faite avec une autre version de Relevé";
+    expect(describeMutation(unreadable, base)).toBe(otherVersion);
+    const deleteWc = mutation({ name: "deleteSpace", args: { id: WC } });
+    expect(describePendingMutations(base, [unreadable, deleteWc])).toEqual([
+      otherVersion,
+      french("Pièce « WC » supprimée"),
+    ]);
+    expect(describeRejection(unreadable, base, "invalid")).toBe(
+      "Une modification faite avec une autre version de Relevé n'a pas pu être appliquée.",
+    );
+  });
+});
+
 describe("describeMutationError", () => {
   it("shows the schema's French message for invalid input", () => {
     const { error } = mutationArgsSchemas.createProperty.safeParse({ id: PROPERTY, name: " " });
@@ -335,6 +358,37 @@ describe("describeRejection", () => {
         args: { id: KITCHEN, levelId: elsewhere, position: "a0" },
       }),
     ).toMatch(/: une pièce ne peut pas changer de logement\.$/);
+  });
+
+  it("says a create was refused because its id exists (only a faulty client reuses one)", () => {
+    const notApplicable = (action: Action) =>
+      describeRejection(mutation(action), base, "not_applicable");
+
+    expect(notApplicable({ name: "createProperty", args: { id: PROPERTY, name: "Villa" } })).toBe(
+      french("Le logement « Villa » n'a pas pu être créé : il existe déjà."),
+    );
+    expect(
+      notApplicable({
+        name: "createLevel",
+        args: { id: R1, propertyId: PROPERTY, name: "R+2", position: "a2" },
+      }),
+    ).toBe(french("Le niveau « R+2 » n'a pas pu être ajouté : il existe déjà."));
+    expect(
+      notApplicable({
+        name: "createSpace",
+        args: { id: KITCHEN, levelId: RDC, name: "Salon", position: "a3" },
+      }),
+    ).toBe(french("La pièce « Salon » n'a pas pu être ajoutée : elle existe déjà."));
+    const copy = duplicateRdc(1);
+    if (copy.name !== "duplicateLevel") throw new Error("unreachable");
+    expect(notApplicable({ ...copy, args: { ...copy.args, id: R1 } })).toBe(
+      french("Le niveau « RDC » n'a pas pu être dupliqué : sa copie existe déjà."),
+    );
+    const [room] = copy.args.spaces;
+    if (!room) throw new Error("unreachable");
+    expect(notApplicable({ ...copy, args: { ...copy.args, spaces: [{ ...room, id: WC }] } })).toBe(
+      french("Le niveau « RDC » n'a pas pu être dupliqué : sa copie existe déjà."),
+    );
   });
 
   it("falls back to generic nouns for entities it cannot name", () => {

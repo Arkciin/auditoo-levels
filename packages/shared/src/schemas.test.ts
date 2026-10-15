@@ -34,6 +34,23 @@ describe("nameSchema", () => {
     },
   );
 
+  // Half an emoji: UTF-8 cannot encode it, and the server would store U+FFFD instead.
+  it.each([
+    ["a high surrogate alone", "Séjour \ud83d"],
+    ["a low surrogate alone", "\ude00 Séjour"],
+    ["halves in the wrong order", "Cui\ude00\ud83dsine"],
+  ])("refuses broken text: %s, in French", (_, name) => {
+    const result = nameSchema.safeParse(name);
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((issue) => issue.message)).toEqual([
+      "Le nom contient un caractère mal formé (un emoji coupé, par exemple)",
+    ]);
+  });
+
+  it("keeps whole emoji, made of a surrogate pair", () => {
+    expect(nameSchema.parse("Séjour 😀")).toBe("Séjour 😀");
+  });
+
   it("still requires a name of at most 80 characters", () => {
     expect(nameSchema.safeParse(" ").error?.issues[0]?.message).toBe("Le nom est obligatoire");
     expect(nameSchema.safeParse("x".repeat(81)).error?.issues[0]?.message).toBe(
@@ -43,16 +60,21 @@ describe("nameSchema", () => {
 });
 
 describe("row schemas", () => {
-  it("accept names stored under older rules, so that legacy rows keep syncing", () => {
-    const legacy = `Ancien${char(0x09)}nom`;
-    const property = {
-      id: "0199f0a0-0000-7000-8000-000000000001",
-      name: legacy,
-      createdAt: 1,
-      deletedAt: null,
-    };
-    expect(propertySchema.parse(property)).toEqual(property);
-    const level = { ...property, propertyId: property.id, position: "a0" };
-    expect(levelSchema.parse(level)).toMatchObject({ name: legacy });
-  });
+  it.each([
+    ["a tab", `Ancien${char(0x09)}nom`],
+    ["half an emoji", "Ancien nom \ud83d"],
+  ])(
+    "accept names stored under older rules (%s), so that legacy rows keep syncing",
+    (_, legacy) => {
+      const property = {
+        id: "0199f0a0-0000-7000-8000-000000000001",
+        name: legacy,
+        createdAt: 1,
+        deletedAt: null,
+      };
+      expect(propertySchema.parse(property)).toEqual(property);
+      const level = { ...property, propertyId: property.id, position: "a0" };
+      expect(levelSchema.parse(level)).toMatchObject({ name: legacy });
+    },
+  );
 });

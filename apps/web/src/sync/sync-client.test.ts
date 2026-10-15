@@ -1,4 +1,11 @@
-import { MAX_MUTATIONS_PER_PUSH, MutationRejectedError } from "@repo/shared";
+import {
+  clientTag,
+  jsonBytes,
+  MAX_MUTATIONS_PER_PUSH,
+  MutationRejectedError,
+  MutationTooLargeError,
+  mutators,
+} from "@repo/shared";
 import { IDBFactory } from "fake-indexeddb";
 import { wrap } from "idb";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -75,6 +82,16 @@ class FakeEventSource extends EventTarget {
   }
 }
 
+/** A `poke` server-sent event, as the server writes it. */
+function poke(version: number, clientTag?: string): MessageEvent {
+  return new MessageEvent("poke", { data: JSON.stringify({ version, clientTag }) });
+}
+
+/** Lets a sync started now (or not) run its course, IndexedDB included. */
+function settle(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 20));
+}
+
 /** `document` stand-in, whose visibility tests set themselves. */
 type FakePage = EventTarget & { visibilityState: DocumentVisibilityState };
 
@@ -117,6 +134,37 @@ describe("SyncClient", () => {
     stalled.resolve();
     await waitForState(client, (s) => s.status.pendingCount === 0 && s.status.phase === "idle");
     expect(server.snapshot().properties.get(P1)?.name).toBe("12 rue des Lilas");
+  });
+
+  it("is sending only from the push of pending changes to the end of its cycle", async () => {
+    const network = new MemoryTransport(new MemoryServer());
+    const seen: string[] = [];
+    let client: SyncClient | undefined;
+    const sending = () => (client?.getState().status.sending ? "sending" : "quiet");
+    const transport: Transport = {
+      push: (request) => {
+        seen.push(`push: ${sending()}`);
+        return network.push(request);
+      },
+      pull: (request) => {
+        seen.push(`pull: ${sending()}`);
+        return network.pull(request);
+      },
+    };
+    client = await createClient({ indexedDB: new IDBFactory(), transport });
+
+    await client.syncNow(); // Nothing to send: a pull, the periodic one or one after a poke.
+    expect(seen).toEqual(["pull: quiet"]);
+
+    await client.mutate("createProperty", { id: P1, name: "Maison" });
+    await client.syncNow();
+    expect(seen).toEqual(["pull: quiet", "push: sending", "pull: sending"]);
+    expect(client.getState().status).toMatchObject({ sending: false, phase: "idle" });
+
+    network.mode = "offline"; // A failed cycle stops sending too.
+    await client.mutate("renameProperty", { id: P1, name: "Villa" });
+    await client.syncNow();
+    expect(client.getState().status).toMatchObject({ sending: false, pendingCount: 1 });
   });
 
   it("publishes immutable states and keeps the view when a pull brings nothing new", async () => {
@@ -167,36 +215,49 @@ describe("SyncClient", () => {
     expect(server.snapshot().spaces.get(S1)?.name).toBe("Cuisine");
   });
 
-  it("reports an unreachable server as offline and retries with exponential backoff", async () => {
+  it("tells an unreachable server from no network, says when it retries, backs off", async () => {
     // Only timers are faked: fake-indexeddb schedules its work with setImmediate.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     vi.spyOn(Math, "random").mockReturnValue(0.5); // No jitter.
     const server = new MemoryServer();
-    const { client, transport } = await createDevice(server);
+    // The browser reports a network (`isOnline`), but requests fail: a weak network, or a server
+    // waking up. Not « offline ».
+    const { client, transport } = await createDevice(server, { now: () => 5_000 });
     transport.mode = "offline";
     client.start();
-    await waitForState(client, (s) => s.status.connection === "offline"); // Retry in 1 s.
+    await waitForState(client, (s) => s.status.nextAttemptAt !== null);
+    expect(client.getState().status).toMatchObject({
+      connection: "unreachable",
+      nextAttemptAt: 6_000, // Retry in 1 s.
+    });
 
     // A change made meanwhile says nothing about the network: it waits for the retry.
     await client.mutate("createProperty", { id: P1, name: "Maison" });
     await vi.advanceTimersByTimeAsync(999);
     expect(transport.attempts).toBe(1);
     await vi.advanceTimersByTimeAsync(1); // Fails again: retry in 2 s.
-    await waitForState(client, (s) => transport.attempts === 2 && s.status.phase === "idle");
-    expect(client.getState().status).toMatchObject({ connection: "offline", lastError: null });
+    await waitForState(client, (s) => s.status.nextAttemptAt === 7_000);
+    expect(transport.attempts).toBe(2);
+    expect(client.getState().status).toMatchObject({
+      connection: "unreachable",
+      phase: "idle",
+      lastError: null,
+    });
 
     transport.mode = "online";
     await vi.advanceTimersByTimeAsync(1_999);
     expect(transport.attempts).toBe(2);
     await vi.advanceTimersByTimeAsync(1);
     await waitForState(client, (s) => s.status.pendingCount === 0);
-    expect(client.getState().status.connection).toBe("online");
+    expect(client.getState().status).toMatchObject({ connection: "online", nextAttemptAt: null });
     expect(server.snapshot().properties.has(P1)).toBe(true);
   });
 
-  it.each<[string, (fakes: { events: FakeEventSource; page: FakePage }) => void]>([
+  it.each<[string, (fakes: { events: FakeEventSource; page: FakePage; tag: string }) => void]>([
     ["the event stream reconnects", ({ events }) => events.dispatchEvent(new Event("open"))],
     ["the server pokes", ({ events }) => events.dispatchEvent(new Event("poke"))],
+    // Its own push went through, but the answer was lost: the server is reachable after all.
+    ["the server pokes for its own push", ({ events, tag }) => events.dispatchEvent(poke(1, tag))],
     [
       "the page shows again",
       ({ page }) => {
@@ -214,15 +275,43 @@ describe("SyncClient", () => {
     const { client, transport } = await createDevice(server, { eventsUrl: "/api/events" });
     transport.mode = "offline";
     client.start();
-    await waitForState(client, (s) => s.status.connection === "offline"); // Backing off.
+    await waitForState(client, (s) => s.status.connection === "unreachable"); // Backing off.
     await client.mutate("createProperty", { id: P1, name: "Maison" }); // Waits for the retry.
     expect(transport.attempts).toBe(1);
 
     transport.mode = "online";
-    signal({ events: FakeEventSource.last(), page });
+    signal({ events: FakeEventSource.last(), page, tag: await clientTag(client.clientId) });
 
     await waitForState(client, (s) => s.status.pendingCount === 0);
     expect(server.snapshot().properties.has(P1)).toBe(true);
+  });
+
+  it("does not pull for the poke of its own push, but does for any other", async () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const server = new MemoryServer();
+    const { client, transport } = await createDevice(server, { eventsUrl: "/api/events" });
+    client.start();
+    const events = FakeEventSource.last();
+    await client.mutate("createProperty", { id: P1, name: "Maison" }); // Pushed, then pulled.
+    await waitForState(client, (s) => s.status.pendingCount === 0 && s.status.phase === "idle");
+    await settle();
+    const attempts = transport.attempts;
+
+    // The server pokes every connected device after a push, the pusher included.
+    events.dispatchEvent(poke(1, await clientTag(client.clientId)));
+    await settle();
+    expect(transport.attempts).toBe(attempts);
+
+    for (const other of [
+      poke(2, await clientTag(uuid(999))), // another device's push
+      poke(3), // a server older than tags
+      new MessageEvent("poke", { data: "not JSON" }),
+    ]) {
+      const before = transport.attempts;
+      events.dispatchEvent(other);
+      await settle();
+      expect(transport.attempts).toBe(before + 1); // a pull
+    }
   });
 
   it("retries at once, ignoring the backoff, when the network comes back mid-attempt", async () => {
@@ -420,6 +509,62 @@ describe("SyncClient", () => {
     expect(client.getState().status.pendingCount).toBe(0);
   });
 
+  it("caps pushes in bytes too, so that no mutation can make one too large", async () => {
+    const server = new MemoryServer();
+    const network = new MemoryTransport(server);
+    const sizes: number[] = [];
+    const transport: Transport = {
+      push: (request) => {
+        sizes.push(jsonBytes(request)); // the body's size, as sent
+        return network.push(request);
+      },
+      pull: (request) => network.pull(request),
+    };
+    const maxPushBytes = 2_000; // `MAX_PUSH_BYTES` in production: an eighth of the server's limit
+    const client = await createClient({ indexedDB: new IDBFactory(), transport, maxPushBytes });
+    // Long names: about 300 bytes of JSON each, far fewer than 100 per push.
+    for (let n = 0; n < 12; n++) {
+      await client.mutate("createProperty", {
+        id: uuid(1_000 + n),
+        name: `${n} ${"é".repeat(70)}`,
+      });
+    }
+
+    await client.syncNow();
+
+    expect(sizes.length).toBeGreaterThan(1);
+    for (const size of sizes) expect(size).toBeLessThanOrEqual(maxPushBytes);
+    const sent = network.pushes.flat().map((mutation) => mutation.id);
+    expect(sent).toEqual(Array.from({ length: 12 }, (_, i) => i + 1)); // in order, once each
+    expect(server.snapshot().properties.size).toBe(12);
+    expect(client.getState().pending).toEqual([]);
+  });
+
+  it("refuses a change too large for a push of its own, and queues nothing", async () => {
+    const { client } = await createDevice(new MemoryServer(), { maxPushBytes: 2_000 });
+    await client.mutate("createProperty", { id: P1, name: "Maison" });
+    await client.mutate("createLevel", { id: L1, propertyId: P1, name: "RDC", position: "a0" });
+    const before = client.getState();
+    const spaces = Array.from({ length: 20 }, (_, i) => ({
+      id: uuid(100 + i),
+      name: `Chambre ${i + 1}`.padEnd(60, "."),
+      position: `a${i.toString(36)}`,
+    }));
+
+    const error = await client
+      .mutate("duplicateLevel", { id: uuid(12), sourceId: L1, name: "R+1", position: "a1", spaces })
+      .then(
+        () => undefined,
+        (reason: unknown) => reason,
+      );
+
+    expect(error).toBeInstanceOf(MutationTooLargeError);
+    expect(describeMutationError(error)).toBe(
+      "Cette modification est trop volumineuse pour être envoyée au serveur.",
+    );
+    expect(client.getState()).toBe(before);
+  });
+
   it("reports server errors in French, keeps the queue, then recovers", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const server = new MemoryServer();
@@ -547,6 +692,37 @@ describe("SyncClient", () => {
       await tabB.syncNow(); // Tab B pushes tab A's mutation: the outbox is shared.
       expect(server.snapshot().properties.has(P1)).toBe(true);
       await waitForState(tabA, (s) => s.pending.length === 0 && s.base.properties.has(P1));
+    });
+
+    it("hears of another tab's push over the BroadcastChannel, not by pulling on its poke", async () => {
+      vi.stubGlobal("EventSource", FakeEventSource);
+      const server = new MemoryServer();
+      const indexedDB = new IDBFactory();
+      const channelName = `releve-sync-test-${crypto.randomUUID()}`;
+      const options = { indexedDB, channelName, eventsUrl: "/api/events" };
+      const transportA = new MemoryTransport(server);
+      const transportB = new MemoryTransport(server);
+      const tabA = await createClient({ ...options, transport: transportA });
+      const tabB = await createClient({ ...options, transport: transportB });
+      tabA.start();
+      const eventsA = FakeEventSource.last();
+      tabB.start();
+      const eventsB = FakeEventSource.last();
+      await waitForState(tabB, (s) => s.status.lastSyncedAt !== null);
+      await settle();
+      const attemptsB = transportB.attempts;
+
+      await tabA.mutate("createProperty", { id: P1, name: "Maison" }); // Pushed, then pulled.
+      await waitForState(tabA, (s) => s.status.pendingCount === 0 && s.status.phase === "idle");
+      // The server pokes both tabs, which share the client id: the poke is their device's.
+      const own = poke(1, await clientTag(tabA.clientId));
+      eventsA.dispatchEvent(own);
+      eventsB.dispatchEvent(own);
+
+      // Tab B shows the change saved, from the storage tab A wrote, without asking the server.
+      await waitForState(tabB, (s) => s.base.properties.has(P1) && s.pending.length === 0);
+      await settle();
+      expect(transportB.attempts).toBe(attemptsB);
     });
 
     it("never pushes a mutation before an older one enqueued by another tab", async () => {
@@ -726,6 +902,91 @@ describe("changes that do not apply", () => {
     expect(server.rejected.map((mutation) => mutation.id)).toEqual([2]);
     expect(client.getState().pending).toEqual([]);
     expect(rowsOf(client.getState().view)).toEqual(rowsOf(server.snapshot()));
+  });
+
+  it("starts with queued changes whose arguments it cannot read (from another version)", async () => {
+    // Written under other rules: by an older version, before they tightened, or by a newer one,
+    // then rolled back. Neither may lock the device out (« Stockage indisponible » for good).
+    const server = new MemoryServer();
+    const indexedDB = new IDBFactory();
+    const other = await openSyncStorage({ indexedDB });
+    await other.enqueue({ name: "createProperty", args: { id: P1, name: "Maison" }, timestamp: 1 });
+    // Typing boundary: what other versions of the app left in the outbox.
+    const unreadable = [
+      { name: "renameProperty", args: null, timestamp: 2 }, // its mutator would throw
+      { name: "renameProperty", args: { id: P1, name: 42 }, timestamp: 3 }, // or write garbage
+      { name: "createLevel", args: { id: L1, propertyId: P1 }, timestamp: 4 },
+    ] as unknown as MutationDraft[];
+    for (const draft of unreadable) await other.enqueue(draft);
+    await other.enqueue({ name: "createProperty", args: { id: P2, name: "Villa" }, timestamp: 5 });
+    other.close();
+
+    const client = await createClient({ indexedDB, transport: new MemoryTransport(server) });
+
+    const { view, pending, rejections, base } = client.getState();
+    expect(rowsOf(view)).toEqual({
+      properties: [
+        { id: P1, name: "Maison", createdAt: 1, deletedAt: null },
+        { id: P2, name: "Villa", createdAt: 5, deletedAt: null },
+      ],
+      levels: [],
+      spaces: [],
+    });
+    // Listed as not applying, without a toast at startup, and kept for the server to judge.
+    const otherVersion =
+      "Une modification faite avec une autre version de Relevé n'a pas pu être appliquée.";
+    expect(rejections.map(({ mutationId, message }) => [mutationId, message])).toEqual([
+      [4, otherVersion],
+      [3, otherVersion],
+      [2, otherVersion],
+    ]);
+    expect(describePendingMutations(base, pending)).toEqual([
+      french("Logement « Maison » créé"),
+      "Modification faite avec une autre version de Relevé",
+      "Modification faite avec une autre version de Relevé",
+      "Modification faite avec une autre version de Relevé",
+      french("Logement « Villa » créé"),
+    ]);
+
+    await client.syncNow(); // The server rejects them as invalid; the others go through.
+    expect(server.rejected.map((mutation) => mutation.id)).toEqual([2, 3, 4]);
+    expect(client.getState().pending).toEqual([]);
+    expect(rowsOf(client.getState().view)).toEqual(rowsOf(server.snapshot()));
+  });
+
+  it("starts when a mutator throws anything at all on a queued change, which the server judges", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const server = new MemoryServer();
+    const indexedDB = new IDBFactory();
+    const storage = await openSyncStorage({ indexedDB });
+    await storage.enqueue({
+      name: "createProperty",
+      args: { id: P1, name: "Maison" },
+      timestamp: 1,
+    });
+    await storage.enqueue({
+      name: "renameProperty",
+      args: { id: P1, name: "Villa" },
+      timestamp: 2,
+    });
+    storage.close();
+    // A bug, or a mutator meeting data another version wrote: not a MutationRejectedError.
+    const failure = new TypeError("Cannot read properties of undefined (reading 'name')");
+    const rename = vi.spyOn(mutators, "renameProperty").mockRejectedValue(failure);
+
+    const client = await createClient({ indexedDB, transport: new MemoryTransport(server) });
+
+    expect(client.getState().view.properties.get(P1)?.name).toBe("Maison");
+    expect(client.getState().rejections).toEqual([
+      expect.objectContaining({ mutationId: 2, reason: "not_applicable" }),
+    ]);
+    expect(error).toHaveBeenCalledExactlyOnceWith("Queued mutation 2 failed to replay", failure);
+    expect(client.getState().pending).toHaveLength(2); // Kept for the server to judge.
+
+    rename.mockRestore(); // The server runs it and accepts it: it has the last word.
+    await client.syncNow();
+    expect(client.getState().pending).toEqual([]);
+    expect(client.getState().view.properties.get(P1)?.name).toBe("Villa");
   });
 
   it(`keeps the latest ${MAX_RECENT_REJECTIONS} rejections, newest first`, async () => {

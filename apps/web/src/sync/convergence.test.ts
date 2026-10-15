@@ -26,6 +26,7 @@ import {
   type Space,
 } from "@repo/shared";
 import { afterAll, afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { Rejection } from "./sync-client";
 import {
   type Action,
   createRandom,
@@ -129,11 +130,16 @@ async function runScenario(
   /** Property each space was created in: moves must never take it elsewhere. */
   const propertyOfSpace = new Map<string, string>();
   const reported = new Map<TestDevice, Set<number>>(devices.map((device) => [device, new Set()]));
+  /** What the devices told their users of those, in French. */
+  const reportedMessages: string[] = [];
   /** Records what the device's current client reports: at startup (listed), then as it goes. */
   const listen = (device: TestDevice) => {
-    const ids = reported.get(device);
-    for (const rejection of device.client.getState().rejections) ids?.add(rejection.mutationId);
-    device.client.onRejected((rejection) => ids?.add(rejection.mutationId));
+    const record = (rejection: Rejection) => {
+      reported.get(device)?.add(rejection.mutationId);
+      reportedMessages.push(rejection.message);
+    };
+    for (const rejection of device.client.getState().rejections) record(rejection);
+    device.client.onRejected(record);
   };
   for (const device of devices) listen(device);
 
@@ -230,6 +236,10 @@ async function runScenario(
     const rejected = [...server.rejectionsOf(device.client.clientId).keys()];
     expect(rejected.filter((id) => !reported.get(device)?.has(id))).toEqual([]);
   }
+  // A create is judged once, against a state that cannot hold its id (see the mutators): none
+  // ever met an existing entity, on the server or on a device, even across wipes.
+  expect(server.refusals.filter((message) => message.endsWith("already exists"))).toEqual([]);
+  expect(reportedMessages.filter((message) => message.includes("existe déjà"))).toEqual([]);
   expect(invariantViolations(server.snapshot(), propertyOfSpace)).toEqual([]);
   return { server, devices, reported };
 }

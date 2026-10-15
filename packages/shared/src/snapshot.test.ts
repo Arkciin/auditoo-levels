@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { MutationRejectedError } from "./mutators";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { MutationRejectedError, mutators } from "./mutators";
 import type { Mutation } from "./protocol";
 import { applyMutations, applyPull, emptySnapshot } from "./snapshot";
 
@@ -9,6 +9,10 @@ const property = {
   createdAt: 1,
   deletedAt: null,
 };
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("applyMutations", () => {
   it("reports a refused mutation with the state it was refused on, and goes on", async () => {
@@ -49,6 +53,53 @@ describe("applyMutations", () => {
       unknown,
       expect.any(MutationRejectedError),
       after,
+    );
+  });
+});
+
+describe("applyMutations, on what another version of the app queued", () => {
+  const create: Mutation = {
+    id: 1,
+    timestamp: 1,
+    name: "createProperty",
+    args: { id: property.id, name: "Maison" },
+  };
+  const rename = (id: number, name: unknown): Mutation =>
+    // Typing boundary: an outbox entry written under other rules.
+    ({ id, timestamp: 1, name: "renameProperty", args: { id: property.id, name } }) as Mutation;
+
+  it("does not run a mutation that breaks today's rules: its mutator would write garbage", async () => {
+    const onRejected = vi.fn();
+    const after = await applyMutations(
+      emptySnapshot,
+      [create, rename(2, 42), rename(3, "Villa")],
+      onRejected,
+    );
+
+    expect(after.properties.get(property.id)?.name).toBe("Villa");
+    expect(onRejected).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ id: 2 }),
+      expect.any(MutationRejectedError),
+      expect.anything(),
+    );
+  });
+
+  it("goes on past a mutator that throws anything, which only means it does not apply here", async () => {
+    const failure = new TypeError("Cannot read properties of undefined");
+    vi.spyOn(mutators, "renameProperty").mockRejectedValueOnce(failure);
+    const onRejected = vi.fn();
+
+    const after = await applyMutations(
+      emptySnapshot,
+      [create, rename(2, "Villa"), rename(3, "Manoir")],
+      onRejected,
+    );
+
+    expect(after.properties.get(property.id)?.name).toBe("Manoir");
+    expect(onRejected).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ id: 2 }),
+      failure,
+      expect.anything(),
     );
   });
 });

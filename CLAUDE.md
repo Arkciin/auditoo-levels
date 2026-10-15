@@ -63,7 +63,8 @@ pnpm vitest run apps/web/src/sync/convergence.test.ts
    parents (`reviveLevel`, `reviveProperty`). Deletes are soft and idempotent, and each `delete*`
    has a `restore*`.
 5. **Puts replace the whole entity.** Spread the current row (`{ ...space, name }`);
-   `ServerTx.put*` writes every column.
+   `ServerTx.put*` writes every column. So a create first refuses an id that exists, deleted or
+   not (`requireNewSpace`…): written over, a room could change logement.
 6. **Positions** come only from `positionAtIndex(siblings, index)`, `positionAtEnd(siblings)` or
    `positionBetween`, with `siblings` sorted by `compareByPosition` and without the moved item.
    Compare with `comparePositions` or `compareByPosition`, never `localeCompare`. A new position
@@ -74,10 +75,17 @@ pnpm vitest run apps/web/src/sync/convergence.test.ts
    IndexedDB changes go through `DATABASE_VERSION` and `upgrade()` in `storage.ts`. Never delete or
    recreate the `outbox` store: its key generator allocates mutation ids.
 9. **The service worker never caches `/api`.** Data belongs to IndexedDB and the sync engine.
-10. **Every push must fit the server's body limit** (`MAX_BODY_BYTES`, `apps/server/src/app.ts`):
-    a push refused for its size is retried as it is, forever. Bound every list in a mutation's
-    arguments (`MAX_DUPLICATED_SPACES`), and keep the "largest push" test of `app.test.ts` building
-    the largest valid mutation.
+10. **Every push must fit the server's body limit** (`MAX_REQUEST_BYTES`,
+    `packages/shared/src/protocol.ts`): a push refused for its size is retried as it is, forever.
+    Devices cut pushes at `MAX_PUSH_BYTES` (`takePushBatch`) and `mutate()` refuses a mutation
+    that would not fit one on its own. Still bound every list in a mutation's arguments
+    (`MAX_DUPLICATED_SPACES`), so that every valid mutation can be queued, and keep the "largest
+    push" test of `app.test.ts` building the largest one.
+11. **No outbox entry may lock a device out.** Another version of the app may have written it.
+    Read the outbox through `readStoredMutation`, replay it with `applyMutations` (any failure
+    there means "does not apply here": reported once, kept for the server to judge), and check
+    `isReadable` before reading a queued mutation's fields (descriptions, the sync sheet). Loading,
+    replaying and describing the queue never throw.
 
 ## Conventions
 
@@ -92,7 +100,8 @@ pnpm vitest run apps/web/src/sync/convergence.test.ts
   one) for « … » with non-breaking spaces and `plural()` for counts ("3 pièces").
 - **Touch first.** `Button` sizes give 44 px targets; inputs keep `text-base` (16 px, or iOS zooms
   in); interactive elements inside a swipeable row get `data-no-swipe`; every control has an
-  accessible French name, which the e2e and component tests select by.
+  accessible French name, which the e2e and component tests select by, and which starts with its
+  visible text when it has some (WCAG 2.5.3: speech input users say what they see).
 - **Reading data**: components use `useView(selector)` with selectors memoized per snapshot
   (`apps/web/src/sync/selectors.ts`), and `useSyncStatus()` for the status alone. Event handlers
   that compute a position or a name read `client.getState().view`: taps can outrun React renders.

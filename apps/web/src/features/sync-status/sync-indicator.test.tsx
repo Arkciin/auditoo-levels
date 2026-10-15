@@ -1,11 +1,20 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpError, SyncProvider, type SyncStatus, type Transport } from "@/sync";
 import type { SyncClient } from "@/sync/sync-client";
-import { MemoryServer, openTestClient, TestDevice, uuid } from "@/sync/test-support/harness";
-import { presentStatus, SyncIndicator } from "./sync-indicator";
+import {
+  deferred,
+  MemoryServer,
+  MemoryTransport,
+  openTestClient,
+  TestDevice,
+  uuid,
+  waitForState,
+} from "@/sync/test-support/harness";
+import { OfflineBanner } from "./offline-banner";
+import { describeNextAttempt, pillName, presentStatus, SyncIndicator } from "./sync-indicator";
 
 const RETRY_PROMISE =
   " Vos modifications restent sur cet appareil et Relevé réessaie automatiquement.";
@@ -14,9 +23,11 @@ function status(overrides: Partial<SyncStatus> = {}): SyncStatus {
   return {
     connection: "online",
     phase: "idle",
+    sending: false,
     pendingCount: 0,
     lastSyncedAt: null,
     lastError: null,
+    nextAttemptAt: null,
     ...overrides,
   };
 }
@@ -32,13 +43,35 @@ describe("presentStatus", () => {
       "Modifications en attente",
     ],
     [
-      "a sync running",
-      status({ phase: "syncing", pendingCount: 2 }),
+      "changes being sent",
+      status({ phase: "syncing", sending: true, pendingCount: 2 }),
       "syncing",
       "Envoi…",
       "Synchronisation en cours",
     ],
+    // The periodic pull and the pull after a poke: nothing of the user's is moving.
+    [
+      "a pull, nothing to send",
+      status({ phase: "syncing" }),
+      "synced",
+      "À jour",
+      "Tout est à jour",
+    ],
+    [
+      "a pull, changes already sent but not confirmed yet",
+      status({ phase: "syncing", pendingCount: 2 }),
+      "pending",
+      "En attente",
+      "Modifications en attente",
+    ],
     ["a failed sync", status({ phase: "error" }), "error", "Erreur", "La synchronisation a échoué"],
+    [
+      "the retry of a failed sync, until it succeeds",
+      status({ phase: "syncing", sending: true, lastError: "Erreur 503.", pendingCount: 1 }),
+      "error",
+      "Erreur",
+      "La synchronisation a échoué",
+    ],
     [
       "no network, whatever else is going on",
       status({ connection: "offline", phase: "error", pendingCount: 3 }),
@@ -46,8 +79,22 @@ describe("presentStatus", () => {
       "Hors ligne",
       "Hors ligne",
     ],
+    // The browser reports a network, but requests fail or time out.
+    [
+      "a server that does not answer, even while changes are sent again",
+      status({ connection: "unreachable", phase: "syncing", sending: true, pendingCount: 3 }),
+      "unreachable",
+      "Serveur injoignable",
+      "Serveur injoignable",
+    ],
   ])("presents %s", (_, input, tone, short, title) => {
     expect(presentStatus(input)).toMatchObject({ tone, short, title });
+  });
+
+  it("does not send a user with a network looking for one when the server does not answer", () => {
+    expect(presentStatus(status({ connection: "unreachable" })).explanation).toBe(
+      "Le serveur ne répond pas\u00a0: le réseau est peut-être trop faible, ou le serveur redémarre. Vos modifications sont enregistrées sur cet appareil et partiront dès qu’il répondra.",
+    );
   });
 
   it("explains a failure with the engine's message and promises a retry", () => {
@@ -68,6 +115,65 @@ describe("presentStatus", () => {
   });
 });
 
+describe("pillName", () => {
+  it.each([
+    ["everything saved", status(), "À jour. Voir le détail"],
+    [
+      "a change waiting",
+      status({ pendingCount: 1 }),
+      "En attente, 1\u00a0modification. Voir le détail",
+    ],
+    [
+      "changes being sent",
+      status({ phase: "syncing", sending: true, pendingCount: 3 }),
+      "Envoi…, 3\u00a0modifications. Voir le détail",
+    ],
+    [
+      "no network",
+      status({ connection: "offline", pendingCount: 14 }),
+      "Hors ligne, 14\u00a0modifications en attente. Voir le détail",
+    ],
+    [
+      "a server that does not answer",
+      status({ connection: "unreachable", pendingCount: 2 }),
+      "Serveur injoignable, 2\u00a0modifications en attente. Voir le détail",
+    ],
+    [
+      "a failed sync",
+      status({ phase: "error", lastError: "Erreur 503.", pendingCount: 2 }),
+      "Erreur de synchronisation, 2\u00a0modifications en attente. Voir le détail",
+    ],
+  ])("starts with what the pill shows: %s", (_, input, name) => {
+    expect(pillName(input)).toBe(name);
+    // Label in name (WCAG 2.5.3): speech input users say the words they see, badge included.
+    expect(name.startsWith(presentStatus(input).short)).toBe(true);
+    if (input.pendingCount > 0) expect(name).toContain(`, ${input.pendingCount}\u00a0`);
+  });
+});
+
+describe("describeNextAttempt", () => {
+  const now = 1_000_000;
+
+  it("counts down to the automatic retry of a failed sync, in whole seconds", () => {
+    const failed = (inMs: number) =>
+      describeNextAttempt(status({ connection: "unreachable", nextAttemptAt: now + inMs }), now);
+    expect(failed(12_000)).toBe("Nouvel essai automatique dans 12\u00a0s.");
+    expect(failed(11_200)).toBe("Nouvel essai automatique dans 12\u00a0s.");
+    expect(failed(-300)).toBe("Nouvel essai automatique dans 1\u00a0s."); // the clock lags
+    const error = status({ phase: "error", lastError: "Erreur 503.", nextAttemptAt: now + 4_000 });
+    expect(describeNextAttempt(error, now)).toBe("Nouvel essai automatique dans 4\u00a0s.");
+  });
+
+  it("says when the retry runs, and nothing when nothing failed", () => {
+    const retrying = status({ connection: "unreachable", phase: "syncing" });
+    expect(describeNextAttempt(retrying, now)).toBe("Nouvel essai en cours…");
+    expect(describeNextAttempt(status({ phase: "syncing" }), now)).toBeNull();
+    expect(describeNextAttempt(status(), now)).toBeNull();
+    // Offline, the network's return triggers the next attempt: the sheet says so already.
+    expect(describeNextAttempt(status({ connection: "offline" }), now)).toBeNull();
+  });
+});
+
 describe("SyncIndicator", () => {
   let client: SyncClient | undefined;
 
@@ -77,15 +183,19 @@ describe("SyncIndicator", () => {
     vi.restoreAllMocks();
   });
 
+  /** The pill and the offline banner, as the header shows them. */
   function renderIndicator(syncClient: SyncClient) {
     client = syncClient;
     render(
       <SyncProvider client={syncClient}>
         <SyncIndicator />
+        <OfflineBanner />
       </SyncProvider>,
     );
     return userEvent.setup();
   }
+
+  const offlineBanner = () => screen.queryByRole("status");
 
   const pill = () => screen.getByRole("button", { name: /Voir le détail$/ });
 
@@ -113,8 +223,61 @@ describe("SyncIndicator", () => {
     await synced.syncNow();
     renderIndicator(synced);
 
-    expect(pill()).toHaveAccessibleName("Tout est à jour. Voir le détail");
+    expect(pill()).toHaveAccessibleName("À jour. Voir le détail");
     expect(pill()).toHaveTextContent("À jour");
+  });
+
+  it("stays quiet while it pulls, and says « Envoi… » only while changes are on their way", async () => {
+    const network = new MemoryTransport(new MemoryServer());
+    let held: { started: ReturnType<typeof deferred>; release: ReturnType<typeof deferred> };
+    const hold = () => {
+      held = { started: deferred(), release: deferred() };
+      return held;
+    };
+    hold().release.resolve();
+    const transport: Transport = {
+      push: async (request) => {
+        held.started.resolve();
+        await held.release.promise;
+        return network.push(request);
+      },
+      pull: async (request) => {
+        held.started.resolve();
+        await held.release.promise;
+        return network.pull(request);
+      },
+    };
+    const device = await openTestClient({ indexedDB: new IDBFactory(), transport });
+    await device.syncNow();
+    renderIndicator(device);
+
+    // The periodic pull, or the one after a poke: nothing of the user's is moving. (`act` lets
+    // React render the cycle's status before the pill is read.)
+    const pull = hold();
+    try {
+      await act(async () => {
+        void device.syncNow();
+        await pull.started.promise;
+      });
+      expect(device.getState().status.phase).toBe("syncing");
+      expect(pill()).toHaveTextContent("À jour");
+    } finally {
+      pull.release.resolve();
+    }
+    await waitFor(() => expect(device.getState().status.phase).toBe("idle"));
+
+    await device.mutate("createProperty", { id: uuid(1), name: "Maison" });
+    const push = hold();
+    try {
+      await act(async () => {
+        void device.syncNow();
+        await push.started.promise;
+      });
+      expect(pill()).toHaveTextContent("Envoi…");
+    } finally {
+      push.release.resolve();
+    }
+    await waitFor(() => expect(pill()).toHaveTextContent("À jour"));
   });
 
   // Counts are joined to their noun by a non-breaking space ("3 modifications"), as in French print.
@@ -123,9 +286,7 @@ describe("SyncIndicator", () => {
     await addHouse(device, ["Cuisine"]);
     renderIndicator(device);
 
-    expect(pill()).toHaveAccessibleName(
-      "Modifications en attente, 3\u00a0modifications en attente. Voir le détail",
-    );
+    expect(pill()).toHaveAccessibleName("En attente, 3\u00a0modifications. Voir le détail");
     expect(within(pill()).getByText("3")).toBeVisible();
   });
 
@@ -142,6 +303,41 @@ describe("SyncIndicator", () => {
     expect(pill()).toHaveTextContent("Hors ligne");
   });
 
+  it("says « Serveur injoignable », not « Hors ligne », on a network the server does not answer on", async () => {
+    // The browser reports a network (`isOnline`), but every request fails or times out.
+    const { client: device, transport } = await TestDevice.create(new MemoryServer());
+    transport.mode = "offline";
+    await device.mutate("createProperty", { id: uuid(1), name: "Maison" });
+    device.start(); // Retries by itself, and says when.
+    await waitForState(device, (s) => s.status.nextAttemptAt !== null);
+    const user = renderIndicator(device);
+
+    expect(pill()).toHaveAccessibleName(
+      "Serveur injoignable, 1\u00a0modification en attente. Voir le détail",
+    );
+    expect(pill()).toHaveTextContent("Serveur injoignable");
+    expect(offlineBanner()).not.toBeInTheDocument(); // It would send the user looking for a network.
+
+    await user.click(pill());
+    const sheet = await screen.findByRole("dialog", { name: "Serveur injoignable" });
+    expect(within(sheet).getByText(/^Le serveur ne répond pas/)).toBeVisible();
+    // Testing Library reads the non-breaking space before « s » as a plain one.
+    expect(
+      within(sheet).getByText(/^Nouvel essai (automatique dans \d+ s\.|en cours…)$/),
+    ).toBeVisible();
+  });
+
+  it("shows the offline banner when the browser reports no network", async () => {
+    const { client: offline } = await TestDevice.create(new MemoryServer(), {
+      isOnline: () => false,
+    });
+    renderIndicator(offline);
+
+    expect(offlineBanner()).toHaveTextContent(
+      "Hors ligne. Vos modifications restent sur cet appareil et partiront au retour du réseau.",
+    );
+  });
+
   it("reports a failed sync", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {}); // the engine logs the failure
     const unavailable = () => Promise.reject(new HttpError(503));
@@ -150,7 +346,7 @@ describe("SyncIndicator", () => {
     await broken.syncNow();
     renderIndicator(broken);
 
-    expect(pill()).toHaveAccessibleName("La synchronisation a échoué. Voir le détail");
+    expect(pill()).toHaveAccessibleName("Erreur de synchronisation. Voir le détail");
     expect(pill()).toHaveTextContent("Erreur");
   });
 

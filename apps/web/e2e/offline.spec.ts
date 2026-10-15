@@ -87,6 +87,33 @@ test("edits made offline survive a reload and sync once back online", async ({
   });
 });
 
+test("a phone with a network the server does not answer on says so, not « Hors ligne »", async ({
+  page,
+}) => {
+  await createProperty(page, uniqueName("Maison"));
+  await expectSynced(page);
+
+  // The phone has a network (`navigator.onLine`), but requests fail: a network too weak, or a
+  // server waking up.
+  await page.route(/\/api\/(push|pull)$/, (route) => route.abort("connectionfailed"));
+  await addLevel(page, "RDC");
+  await expect(syncPill(page)).toHaveAccessibleName(
+    "Serveur injoignable, 1 modification en attente. Voir le détail",
+  );
+  // The banner would send the user looking for a network they have.
+  await expect(offlineBanner(page)).toBeHidden();
+
+  await syncPill(page).tap();
+  const sheet = page.getByRole("dialog", { name: "Serveur injoignable" });
+  await expect(
+    sheet.getByText(/^Nouvel essai (automatique dans \d+\s+s\.|en cours…)$/),
+  ).toBeVisible();
+
+  await page.unrouteAll();
+  await sheet.getByRole("button", { name: "Synchroniser maintenant" }).tap();
+  await expect(page.getByRole("dialog", { name: "Tout est à jour" })).toBeVisible();
+});
+
 test("a rename on one device shows up on another without a reload", async ({
   page,
   secondDevice,

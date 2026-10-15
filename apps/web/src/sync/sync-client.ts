@@ -21,21 +21,31 @@
  * - when the server's database is replaced (another epoch), the device starts over from the new
  *   database's data and pushes its pending mutations again, none of them skipped;
  * - no change disappears without a word: one the server rejects, or that no longer applies to
- *   newer server data, is reported (`rejections`, `onRejected`) once it leaves the view.
+ *   newer server data, is reported (`rejections`, `onRejected`) once it leaves the view;
+ * - no queued change can stop the device from starting or syncing: one this version cannot read
+ *   or replay (another version queued it) only does not apply here, and every push fits the
+ *   server's body limit.
  */
 import {
   applyMutation,
   applyMutations,
   applyPull,
+  clientTag,
+  jsonBytes,
   MAX_MUTATIONS_PER_PUSH,
+  MAX_PUSH_BYTES,
   type Mutation,
   type MutationArgs,
   type MutationName,
+  MutationRejectedError,
+  MutationTooLargeError,
   mutationArgsSchemas,
   type PullResponse,
   type PushResponse,
+  readStoredMutation,
   type Snapshot,
   SnapshotTx,
+  takePushBatch,
 } from "@repo/shared";
 import { describeRejection } from "./describe";
 import {
@@ -49,16 +59,25 @@ import { HttpError, NetworkError, ProtocolError, type Transport } from "./transp
 /** Sync health, for the UI's status indicator. */
 export interface SyncStatus {
   /**
-   * `"offline"` when the browser reports no network or when the last request could not reach the
-   * server, until a request succeeds.
+   * `"offline"` when the browser reports no network (`navigator.onLine === false`, reliable);
+   * `"unreachable"` when it reports one but the last request could not reach the server (it
+   * failed or timed out: a network too weak, or a server still waking up), until a request
+   * succeeds.
    */
-  readonly connection: "online" | "offline";
+  readonly connection: "online" | "offline" | "unreachable";
   /**
-   * `"syncing"` while a push/pull cycle runs; `"error"` when the last cycle failed for a reason
-   * other than connectivity (the server rejected the request or answered garbage). Being offline
-   * is a normal condition for this app, not an error.
+   * `"syncing"` while a push/pull cycle runs, background pulls included; `"error"` when the last
+   * cycle failed for a reason other than connectivity (the server rejected the request or answered
+   * garbage). Being offline is a normal condition for this app, not an error.
    */
   readonly phase: "idle" | "syncing" | "error";
+  /**
+   * Local changes are on their way to the server: from the moment a cycle starts pushing pending
+   * mutations until it ends with the pull that confirms them. A cycle with nothing to send (the
+   * periodic pull, a poke) leaves it false, so that the UI only shows activity when the user's
+   * own work is moving.
+   */
+  readonly sending: boolean;
   /** Local mutations not confirmed by the server yet. */
   readonly pendingCount: number;
   /** End of the last successful cycle (epoch ms), `null` until the first one. */
@@ -68,6 +87,11 @@ export interface SyncStatus {
    * succeeds, and when the last one only failed for lack of network.
    */
   readonly lastError: string | null;
+  /**
+   * When the automatic retry of a failed cycle is due (epoch ms); `null` when none is scheduled,
+   * as while offline, where the network's return triggers the next attempt.
+   */
+  readonly nextAttemptAt: number | null;
 }
 
 /**
@@ -138,6 +162,11 @@ export interface SyncClientOptions {
    * @defaultValue {@link DEFAULT_CHANNEL_NAME}
    */
   readonly channelName?: string | null;
+  /**
+   * Most bytes of JSON in a push. A mutation that would not fit one on its own is refused.
+   * @defaultValue `MAX_PUSH_BYTES`, far below the server's limit
+   */
+  readonly maxPushBytes?: number;
 }
 
 /** Default name of the cross-tab BroadcastChannel and Web Lock. */
@@ -188,6 +217,7 @@ interface SyncWaiter {
 interface Refusal {
   readonly mutation: Mutation;
   readonly against: Snapshot;
+  readonly error: unknown;
 }
 
 /**
@@ -215,6 +245,7 @@ export class SyncClient {
   private readonly isOnline: () => boolean;
   private readonly eventsUrl: string | undefined;
   private readonly pullIntervalMs: number;
+  private readonly maxPushBytes: number;
   private readonly channelName: string | null;
   private readonly channel: BroadcastChannel | undefined;
   private readonly abortController = new AbortController();
@@ -244,9 +275,11 @@ export class SyncClient {
 
   // Inputs of `status`, which `publish()` derives from them.
   private phase: SyncStatus["phase"] = "idle";
+  private sending = false;
   private networkDown = false;
   private lastSyncedAt: number | null = null;
   private lastError: string | null = null;
+  private nextAttemptAt: number | null = null;
 
   /** Tail of the queue that serializes state transitions. Never rejects. */
   private transitions: Promise<unknown> = Promise.resolve();
@@ -275,22 +308,33 @@ export class SyncClient {
    * talk to the server until {@link SyncClient.start} or {@link SyncClient.syncNow} is called.
    */
   static async create(options: SyncClientOptions): Promise<SyncClient> {
-    const stored = await options.storage.loadState();
+    const stored = readStoredState(await options.storage.loadState());
+    // Never throws: a queued change this version cannot replay is listed as not applying, not a
+    // reason to refuse to start (the page would say « Stockage indisponible » for good).
     const { view, refused } = await replay(stored.base, stored.pending);
-    const client = new SyncClient(options, stored, view);
+    // Without WebCrypto (plain HTTP from another host than localhost), every poke counts as
+    // another device's: one pull too many after each push, as before pokes named their pusher.
+    const tag = await clientTag(stored.clientId).catch(() => null);
+    const client = new SyncClient(options, stored, view, tag);
     // Queued changes that no longer apply (reported in an earlier session, most likely): listed
     // in the state, but nobody listens to `onRejected` yet, so no toast for old news.
     await client.reportRefusals(refused, stored);
     return client;
   }
 
-  private constructor(options: SyncClientOptions, stored: StoredState, view: Snapshot) {
+  private constructor(
+    options: SyncClientOptions,
+    stored: StoredState,
+    view: Snapshot,
+    private readonly tag: string | null,
+  ) {
     this.storage = options.storage;
     this.transport = options.transport;
     this.now = options.now ?? Date.now;
     this.isOnline = options.isOnline ?? defaultIsOnline;
     this.eventsUrl = options.eventsUrl;
     this.pullIntervalMs = options.pullIntervalMs ?? DEFAULT_PULL_INTERVAL_MS;
+    this.maxPushBytes = options.maxPushBytes ?? MAX_PUSH_BYTES;
     this.channelName =
       options.channelName === undefined ? DEFAULT_CHANNEL_NAME : options.channelName;
     this.clientId = stored.clientId;
@@ -340,6 +384,7 @@ export class SyncClient {
    * - `args` are invalid (`ZodError`);
    * - the action does not apply to the current view, e.g. it targets an entity that does not
    *   exist (`MutationRejectedError`): the user acted on stale state;
+   * - the mutation would not fit a push of its own (`MutationTooLargeError`);
    * - the device storage fails (e.g. `QuotaExceededError`).
    *
    * Show `describeMutationError(error)` to the user rather than `error.message`, which Zod 4
@@ -353,6 +398,11 @@ export class SyncClient {
   ): Promise<void> => {
     // Timestamped at call time: it records when the user acted, not when the queue got to it.
     const draft = createDraft(name, args, this.now());
+    // Queued, it would be pushed as it is, forever. Measured at its largest: with the longest id
+    // the outbox can allocate, and an epoch (a UUID, like the client id).
+    const alone = { ...draft, id: Number.MAX_SAFE_INTEGER };
+    const push = { clientId: this.clientId, epoch: this.clientId, mutations: [alone] };
+    if (jsonBytes(push) > this.maxPushBytes) throw new MutationTooLargeError();
     await this.transition(async () => {
       if (this.disposed) throw new Error("SyncClient is disposed");
       const view = await dryRun(this.state.view, draft);
@@ -394,6 +444,7 @@ export class SyncClient {
     this.clearRetry();
     this.events?.close();
     this.events = undefined;
+    if (!this.disposed) this.publish(); // No retry is due any more.
   }
 
   /**
@@ -488,6 +539,7 @@ export class SyncClient {
     if (this.disposed) return "ok";
     this.failures = 0;
     this.phase = "idle";
+    this.sending = false;
     this.lastError = null;
     this.lastSyncedAt = this.now();
     this.publish();
@@ -510,12 +562,17 @@ export class SyncClient {
     // id, and the server skips ids at or below the last one it processed. Reading the outbox
     // guarantees we never send a mutation before an older one another tab enqueued meanwhile.
     for (;;) {
-      const mutations = await this.storage.readOutbox(this.lastAckedId, MAX_MUTATIONS_PER_PUSH);
-      if (mutations.length === 0) return;
-      const response = await this.transport.push(
-        { clientId: this.clientId, epoch: this.epoch ?? undefined, mutations },
-        { signal },
-      );
+      const queued = await this.storage.readOutbox(this.lastAckedId, MAX_MUTATIONS_PER_PUSH);
+      if (queued.length === 0) return;
+      const envelope = { clientId: this.clientId, epoch: this.epoch ?? undefined };
+      // Capped in bytes too, far below the server's limit: a push it refused for its size would
+      // be sent again as it is, forever. The next one takes over where it stops.
+      const mutations = takePushBatch(envelope, queued, this.maxPushBytes);
+      if (!this.sending) {
+        this.sending = true;
+        this.publish();
+      }
+      const response = await this.transport.push({ ...envelope, mutations }, { signal });
       this.networkDown = false;
       // Another database answered: it processed nothing, and the pull will start over.
       if (this.epoch !== null && response.epoch !== this.epoch) return;
@@ -620,6 +677,7 @@ export class SyncClient {
 
   private recordFailure(error: unknown): void {
     this.failures += 1;
+    this.sending = false;
     if (error instanceof NetworkError) {
       this.networkDown = true;
       this.phase = "idle";
@@ -646,15 +704,20 @@ export class SyncClient {
   private scheduleRetry(): void {
     if (!this.started || this.disposed) return;
     this.clearRetry();
+    const delay = retryDelay(this.failures);
     this.retryTimer = setTimeout(() => {
       this.retryTimer = undefined;
       this.requestSync("routine");
-    }, retryDelay(this.failures));
+    }, delay);
+    this.nextAttemptAt = this.now() + delay;
+    this.publish();
   }
 
+  /** Cancels the scheduled retry; whoever calls it publishes the status soon after. */
   private clearRetry(): void {
     clearTimeout(this.retryTimer);
     this.retryTimer = undefined;
+    this.nextAttemptAt = null;
   }
 
   private async withSyncLock(task: () => Promise<void>): Promise<void> {
@@ -710,11 +773,13 @@ export class SyncClient {
 
   private computeStatus(pendingCount: number, previous: SyncStatus | undefined): SyncStatus {
     const next: SyncStatus = {
-      connection: this.networkDown || !this.isOnline() ? "offline" : "online",
+      connection: !this.isOnline() ? "offline" : this.networkDown ? "unreachable" : "online",
       phase: this.phase,
+      sending: this.sending,
       pendingCount,
       lastSyncedAt: this.lastSyncedAt,
       lastError: this.lastError,
+      nextAttemptAt: this.nextAttemptAt,
     };
     return previous && sameStatus(previous, next) ? previous : next;
   }
@@ -747,7 +812,12 @@ export class SyncClient {
     if (fresh.length === 0) return;
     const at = this.now();
     const rejections: Rejection[] = [];
-    for (const { mutation, against } of fresh) {
+    for (const { mutation, against, error } of fresh) {
+      // Not a verdict on the data, but a mutator failing on what another version queued, or a
+      // bug: worth a trace, once.
+      if (!(error instanceof MutationRejectedError)) {
+        console.error(`Queued mutation ${mutation.id} failed to replay`, error);
+      }
       const earlier = previous.pending.filter((other) => other.id < mutation.id);
       const before = await applyMutations(previous.base, earlier);
       const message = describeRejection(mutation, before, "not_applicable", against);
@@ -821,7 +891,7 @@ export class SyncClient {
       this.reloadScheduled = false;
       if (this.disposed) return;
       const previous = this.state;
-      const stored = await this.storage.loadState();
+      const stored = readStoredState(await this.storage.loadState());
       const { view, refused } = await replay(stored.base, stored.pending);
       // Another tab started over from a new database: what we know was acknowledged no longer is,
       // and the previous database's verdicts no longer stand.
@@ -861,7 +931,17 @@ export class SyncClient {
     this.requestSync("routine");
   };
 
-  private readonly handlePoke = (): void => {
+  private readonly handleStreamOpen = (): void => {
+    this.requestSync("signal");
+  };
+
+  private readonly handlePoke = (event: Event): void => {
+    // A push from this device caused it (from this tab or another: they share the client id).
+    // The pushing cycle pulls right after its push, and tells the other tabs over the
+    // BroadcastChannel: no pull for it. Unless this tab is waiting out a failure: the poke then
+    // proves the server reachable, like any other.
+    const own = this.tag !== null && pokeTag(event) === this.tag;
+    if (own && this.retryTimer === undefined) return;
     this.requestSync("signal");
   };
 
@@ -870,7 +950,7 @@ export class SyncClient {
     const events = new EventSource(this.eventsUrl);
     // A poke only says "something changed", and pokes sent while we were not connected are lost:
     // catch up on every (re)connection too.
-    events.addEventListener("open", this.handlePoke);
+    events.addEventListener("open", this.handleStreamOpen);
     events.addEventListener("poke", this.handlePoke);
     this.events = events;
   }
@@ -907,7 +987,18 @@ async function dryRun(view: Snapshot, draft: MutationDraft): Promise<Snapshot> {
   return tx.commit();
 }
 
-/** The rebase: replays pending mutations on top of a server snapshot, noting those refused. */
+/**
+ * The stored state with its outbox as this version reads it: each entry validated, as another
+ * version of the app may have written it (see `readStoredMutation`).
+ */
+function readStoredState(stored: StoredState): StoredState {
+  return { ...stored, pending: stored.pending.map(readStoredMutation) };
+}
+
+/**
+ * The rebase: replays pending mutations on top of a server snapshot, noting those refused. Never
+ * throws: whatever stops a mutation here only means it does not apply on this device.
+ */
 async function replay(
   base: Snapshot,
   pending: readonly Mutation[],
@@ -915,8 +1006,8 @@ async function replay(
   const refused: Refusal[] = [];
   // A refused mutation stays in the outbox: the server is authoritative and will settle it, after
   // which the next pull drops it like any processed mutation.
-  const view = await applyMutations(base, pending, (mutation, _error, against) => {
-    refused.push({ mutation, against });
+  const view = await applyMutations(base, pending, (mutation, error, against) => {
+    refused.push({ mutation, against, error });
   });
   return { view, refused };
 }
@@ -951,6 +1042,22 @@ function isRejection(value: unknown): value is Rejection {
   );
 }
 
+/** The tag of the device whose push caused a poke, if the event carries one (see `Poke`). */
+function pokeTag(event: Event): string | undefined {
+  if (!(event instanceof MessageEvent) || typeof event.data !== "string") return undefined;
+  try {
+    const poke: unknown = JSON.parse(event.data);
+    return typeof poke === "object" &&
+      poke !== null &&
+      "clientTag" in poke &&
+      typeof poke.clientTag === "string"
+      ? poke.clientTag
+      : undefined;
+  } catch {
+    return undefined; // Not ours to judge: any poke is still a reason to pull.
+  }
+}
+
 function hasRows(changes: PullResponse["changes"]): boolean {
   return changes.properties.length > 0 || changes.levels.length > 0 || changes.spaces.length > 0;
 }
@@ -959,9 +1066,11 @@ function sameStatus(a: SyncStatus, b: SyncStatus): boolean {
   return (
     a.connection === b.connection &&
     a.phase === b.phase &&
+    a.sending === b.sending &&
     a.pendingCount === b.pendingCount &&
     a.lastSyncedAt === b.lastSyncedAt &&
-    a.lastError === b.lastError
+    a.lastError === b.lastError &&
+    a.nextAttemptAt === b.nextAttemptAt
   );
 }
 

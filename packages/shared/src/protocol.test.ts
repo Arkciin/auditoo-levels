@@ -2,7 +2,12 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import { z } from "zod";
 import { type MutationArgs, mutationNames } from "./mutators";
 import {
+  clientTag,
+  isReadable,
+  jsonBytes,
   MAX_MUTATIONS_PER_PUSH,
+  MAX_PUSH_BYTES,
+  MAX_REQUEST_BYTES,
   type Mutation,
   type MutationEnvelope,
   mutationSchema,
@@ -11,6 +16,8 @@ import {
   pushRequestSchema,
   pushResponseSchema,
   type ReceivedPushRequest,
+  readStoredMutation,
+  takePushBatch,
 } from "./protocol";
 import { idSchema } from "./schemas";
 
@@ -83,6 +90,72 @@ describe("mutationSchema", () => {
       MutationArgs<"moveSpace">
     >();
     expectTypeOf<Mutation["name"]>().toEqualTypeOf<(typeof mutationNames)[number]>();
+  });
+});
+
+describe("jsonBytes", () => {
+  it("counts the UTF-8 bytes of the JSON a request sends", () => {
+    expect(jsonBytes("abc")).toBe(5);
+    expect(jsonBytes("é")).toBe(4);
+    expect(jsonBytes("€")).toBe(5);
+    expect(jsonBytes("😀")).toBe(6);
+    expect(jsonBytes('"')).toBe(4); // escaped: \"
+    expect(jsonBytes("\ud800")).toBe(8); // escaped: \ud800
+    expect(jsonBytes({ a: [1, "é"], b: undefined })).toBe(14); // {"a":[1,"é"]}
+  });
+});
+
+describe("takePushBatch", () => {
+  const envelope = { clientId: CLIENT, epoch: undefined };
+  const renames: Mutation[] = Array.from({ length: MAX_MUTATIONS_PER_PUSH + 20 }, (_, i) => ({
+    id: i + 1,
+    timestamp: 1_000,
+    name: "renameProperty",
+    args: { id: PROPERTY, name: `Nom ${i} ${"é".repeat(60)}` },
+  }));
+
+  it("fills a push up to its byte limit, exactly", () => {
+    const threeFit = jsonBytes({ ...envelope, mutations: renames.slice(0, 3) });
+    expect(takePushBatch(envelope, renames, threeFit)).toEqual(renames.slice(0, 3));
+    expect(takePushBatch(envelope, renames, threeFit - 1)).toEqual(renames.slice(0, 2));
+  });
+
+  it(`takes at most ${MAX_MUTATIONS_PER_PUSH} mutations, and always the first one`, () => {
+    expect(takePushBatch(envelope, renames)).toEqual(renames.slice(0, MAX_MUTATIONS_PER_PUSH));
+    expect(takePushBatch(envelope, renames, 1)).toEqual(renames.slice(0, 1));
+  });
+
+  it("stays far below what the server accepts", () => {
+    expect(MAX_PUSH_BYTES * 8).toBe(MAX_REQUEST_BYTES);
+  });
+});
+
+describe("readStoredMutation", () => {
+  it("reads a valid outbox entry as the server will apply it", () => {
+    const stored = { ...valid, args: { id: PROPERTY, name: "  Maison ", colour: "vert" } };
+    const read = readStoredMutation(stored as MutationEnvelope as Mutation);
+
+    expect(read).toEqual(valid);
+    expect(isReadable(read)).toBe(true);
+  });
+
+  it("keeps an entry another version wrote under other rules as it is, marked unreadable", () => {
+    for (const entry of [invalidArgs, unknownName, { ...valid, args: null }]) {
+      // Typing boundary: what another version of the app may have left in the outbox.
+      const stored = entry as MutationEnvelope as Mutation;
+      expect(readStoredMutation(stored)).toBe(stored);
+      expect(isReadable(stored)).toBe(false);
+    }
+  });
+});
+
+describe("clientTag", () => {
+  it("is the start of the client id's SHA-256: the same on every runtime, one-way", async () => {
+    // sha256("0199f0a0-0000-7000-8000-0000000000a1"), first 16 bytes.
+    expect(await clientTag(CLIENT)).toBe("6daa395c5c800d178a977ea580c5fc97");
+    expect(await clientTag("0199f0a0-0000-7000-8000-0000000000a2")).not.toBe(
+      await clientTag(CLIENT),
+    );
   });
 });
 

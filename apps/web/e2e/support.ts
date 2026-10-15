@@ -93,19 +93,23 @@ export function uniqueName(prefix: string): string {
 
 // --- Sync status ---------------------------------------------------------------------------------
 
-/** The header pill; its accessible name spells out the sync state and the pending count. */
+/**
+ * The header pill. Its accessible name starts with what it shows, then spells out the pending
+ * count: « Hors ligne, 3 modifications en attente. Voir le détail ».
+ */
 export function syncPill(page: Page): Locator {
   return page.getByRole("button", { name: /Voir le détail$/ });
 }
 
 /**
- * Nothing is waiting for the server: every change this device made is saved there.
+ * Nothing is waiting for the server: every change this device made is saved there. It says
+ * nothing of pulls: the pill stays « À jour » while one runs.
  *
  * Only meaningful once the last change is on screen (its mutation is then queued): before that,
  * the pill may still show the state from before the change.
  */
 export async function expectSynced(page: Page): Promise<void> {
-  await expect(syncPill(page)).toHaveAccessibleName("Tout est à jour. Voir le détail");
+  await expect(syncPill(page)).toHaveAccessibleName("À jour. Voir le détail");
 }
 
 /**
@@ -172,10 +176,15 @@ export function backToList(page: Page): Promise<void> {
 
 /** Creates a logement with the "Nouveau logement" sheet; ends on its (empty) structure screen. */
 export async function createProperty(page: Page, name: string): Promise<void> {
+  const firstPull = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/pull",
+  );
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1, name: "Logements" })).toBeVisible();
   // The first sync may swap the empty state (it has its own "Nouveau logement" button) for the
-  // list. Afterwards the screen only changes when another test adds a logement.
+  // list. Afterwards the screen only changes when another test adds a logement. (The pill stays
+  // « À jour » during a pull: its answer tells when.)
+  await firstPull;
   await expectSynced(page);
   await page.getByRole("button", { name: "Nouveau logement", exact: true }).last().tap();
   const sheet = page.getByRole("dialog", { name: "Nouveau logement" });

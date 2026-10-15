@@ -6,7 +6,13 @@
  * name. The current view is not that state (it already includes the rename): to describe the
  * whole queue, use {@link describePendingMutations}, which walks it from the base.
  */
-import { type Mutation, MutationRejectedError, mutationNames, type Snapshot } from "@repo/shared";
+import {
+  isReadable,
+  type Mutation,
+  MutationRejectedError,
+  MutationTooLargeError,
+  type Snapshot,
+} from "@repo/shared";
 import { StorageClosedError } from "./storage";
 
 type EntityKind = "property" | "level" | "space";
@@ -75,6 +81,7 @@ export function describePendingMutations(
 
   const descriptions = pending.map((mutation) => {
     const description = describe(mutation, names);
+    if (!isReadable(mutation)) return description;
     switch (mutation.name) {
       case "createProperty":
       case "renameProperty":
@@ -113,7 +120,12 @@ export function describePendingMutations(
   return descriptions;
 }
 
+/** A queued mutation this version cannot read (see `isReadable`), however it was described. */
+const OTHER_VERSION = "Modification faite avec une autre version de Relevé";
+
 function describe(mutation: Mutation, names: NameLookup): string {
+  // Its fields cannot be trusted: another version of the app wrote it, under other rules.
+  if (!isReadable(mutation)) return OTHER_VERSION;
   switch (mutation.name) {
     case "createProperty":
       return `${subject("property", mutation.args.name)} créé`;
@@ -158,7 +170,7 @@ function describe(mutation: Mutation, names: NameLookup): string {
     case "restoreSpace":
       return `${subject("space", names.space(mutation.args.id)?.name)} restaurée`;
     default:
-      return unknownKind(mutation, "Modification faite avec une autre version de Relevé");
+      return unknownKind(mutation, OTHER_VERSION);
   }
 }
 
@@ -182,6 +194,7 @@ export function describeMutationError(error: unknown): string {
   if (error instanceof MutationRejectedError) {
     return "Cette action ne s'applique plus : les données ont changé entre-temps.";
   }
+  if (error instanceof MutationTooLargeError) return error.message;
   // The page must be reloaded: the message says so.
   if (error instanceof StorageClosedError) return error.message;
   if (error instanceof Error && error.name === "QuotaExceededError") {
@@ -218,14 +231,12 @@ export function describeRejection(
   reason: string,
   against: Snapshot = before,
 ): string {
-  if (!KNOWN_MUTATIONS.has(mutation.name)) {
+  // A kind this version does not know, or arguments it cannot read: another version queued it.
+  if (!isReadable(mutation)) {
     return "Une modification faite avec une autre version de Relev\u00e9 n'a pas pu \u00eatre appliqu\u00e9e.";
   }
   return `${notDone(mutation, namesIn(before))}\u00a0: ${why(mutation, reason, against)}.`;
 }
-
-/** What this version knows: an outbox may also hold kinds another version queued. */
-const KNOWN_MUTATIONS: ReadonlySet<string> = new Set(mutationNames);
 
 const THE: Readonly<Record<EntityKind, string>> = {
   property: "Le logement",
@@ -318,15 +329,18 @@ function missingEntity(mutation: Mutation, state: Snapshot): string | undefined 
     return found ? property(found.propertyId) : "le niveau n'existe plus";
   };
   switch (mutation.name) {
-    case "createProperty":
     case "deleteProperty":
     case "deleteLevel":
     case "deleteSpace":
       return undefined; // Their mutators never refuse.
+    // A create never writes over an entity: only a faulty client reuses an id.
+    case "createProperty":
+      return state.properties.has(mutation.args.id) ? "il existe déjà" : undefined;
     case "renameProperty":
     case "restoreProperty":
       return state.properties.has(mutation.args.id) ? undefined : "il n'existe plus";
     case "createLevel":
+      if (state.levels.has(mutation.args.id)) return "il existe déjà";
       return property(mutation.args.propertyId);
     case "renameLevel":
     case "moveLevel":
@@ -336,9 +350,15 @@ function missingEntity(mutation: Mutation, state: Snapshot): string | undefined 
     }
     case "duplicateLevel": {
       const source = state.levels.get(mutation.args.sourceId);
-      return source ? property(source.propertyId) : "il n'existe plus";
+      if (!source) return "il n'existe plus";
+      const { id, spaces } = mutation.args;
+      if (state.levels.has(id) || spaces.some((space) => state.spaces.has(space.id))) {
+        return "sa copie existe déjà";
+      }
+      return property(source.propertyId);
     }
     case "createSpace":
+      if (state.spaces.has(mutation.args.id)) return "elle existe déjà";
       return level(mutation.args.levelId);
     case "renameSpace":
     case "restoreSpace": {
