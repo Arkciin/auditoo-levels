@@ -3,7 +3,13 @@ import { Link, useCanGoBack, useRouter } from "@tanstack/react-router";
 import { ArchiveRestore, ArrowLeft, EllipsisVertical, Pencil, Plus, Trash } from "lucide-react";
 import { type MouseEvent, useCallback, useRef, useState } from "react";
 
-import { ActionBar, AppHeader, ScreenBody } from "@/components/app-layout";
+import {
+  ActionBar,
+  AppHeader,
+  CompactTitle,
+  ScreenBody,
+  useLargeTitle,
+} from "@/components/app-layout";
 import { DatumMarker } from "@/components/datum-marker";
 import { EditableText } from "@/components/editable-text";
 import { Button } from "@/components/ui/button";
@@ -45,6 +51,7 @@ export function StructureScreen({ propertyId }: { propertyId: string }) {
   const clearAutoAdd = useCallback(() => setAutoAddLevelId(null), []);
   const addLevelMounted = useOpenedOnce(addingLevel);
   const deletedSheetMounted = useOpenedOnce(deletedSheet);
+  const { headerRef, titleRef, titleUnderHeader } = useLargeTitle();
   const property = liveProperty ?? leaving;
 
   if (!property) {
@@ -84,20 +91,9 @@ export function StructureScreen({ propertyId }: { propertyId: string }) {
   return (
     <>
       <AppHeader
+        ref={headerRef}
         leading={<BackToList />}
-        title={
-          <h1 className="min-w-0 flex-1">
-            <EditableText
-              value={property.name}
-              label="Nom du logement"
-              editing={renaming}
-              onEditingChange={setRenaming}
-              onSave={rename}
-              className="block max-w-full text-lg font-bold"
-              inputClassName="h-10 text-lg font-bold"
-            />
-          </h1>
-        }
+        title={<CompactTitle shown={titleUnderHeader}>{property.name}</CompactTitle>}
         actions={
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -144,21 +140,36 @@ export function StructureScreen({ propertyId }: { propertyId: string }) {
         }
       />
       <ScreenBody>
-        {structure.length === 0 ? (
-          // Its heading says « Aucun niveau » already: no summary above it.
-          <NoLevels onPick={(name) => void quickAdd(name)} onOther={() => setAddingLevel(true)} />
-        ) : (
-          <>
-            <p className="px-4 pt-3 text-sm text-muted-foreground tabular-nums">
+        {/* The name in full, however long (an address often is): too long for the header. */}
+        <div className="px-4 pt-3">
+          <h1 ref={titleRef} className="text-2xl font-bold">
+            <EditableText
+              value={property.name}
+              label="Nom du logement"
+              editing={renaming}
+              onEditingChange={setRenaming}
+              onSave={rename}
+              // `text-clip` replaces the truncation of EditableText's button: the name wraps.
+              className="block min-h-11 w-full text-clip whitespace-normal break-words"
+              inputClassName="h-12 text-2xl font-bold"
+            />
+          </h1>
+          {/* Without levels, the empty state below says « Aucun niveau » already. */}
+          {structure.length > 0 ? (
+            <p className="text-sm text-muted-foreground tabular-nums">
               {levelsAndRooms(structure.length, spaceCount)}
             </p>
-            <StructureBoard
-              propertyId={propertyId}
-              structure={structure}
-              autoAddLevelId={autoAddLevelId}
-              onAutoAddHandled={clearAutoAdd}
-            />
-          </>
+          ) : null}
+        </div>
+        {structure.length === 0 ? (
+          <NoLevels onPick={(name) => void quickAdd(name)} onOther={() => setAddingLevel(true)} />
+        ) : (
+          <StructureBoard
+            propertyId={propertyId}
+            structure={structure}
+            autoAddLevelId={autoAddLevelId}
+            onAutoAddHandled={clearAutoAdd}
+          />
         )}
       </ScreenBody>
       <ActionBar>
