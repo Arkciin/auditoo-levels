@@ -280,19 +280,25 @@ test("after a deletion from a menu, the focus goes to the next row, never to the
   await expect(page.getByRole("button", { name: "Ajouter un niveau", exact: true })).toBeFocused();
 });
 
-test("after a rename, the focus is back on the name", async ({ page }) => {
+test("« Renommer » puts the focus in the field, and a rename gives it back to the name", async ({
+  page,
+}) => {
   await createProperty(page, uniqueName("Maison"));
   await addLevel(page, "RDC");
   await typeRooms(page, "RDC", ["Cuisine"]);
 
+  // Focused by the menu itself, or a phone opens no keyboard.
   await roomAction(page, "Cuisine", "Renommer");
   const field = page.getByRole("textbox", { name: "Nom de la pièce", exact: true });
+  await expect(field).toBeFocused();
   await field.fill("Cuisine ouverte");
   await field.press("Enter");
   await expect(roomName(page, "Cuisine ouverte")).toBeFocused();
 
   await levelAction(page, "RDC", "Renommer");
-  await page.getByRole("textbox", { name: "Nom du niveau", exact: true }).press("Escape");
+  const levelField = page.getByRole("textbox", { name: "Nom du niveau", exact: true });
+  await expect(levelField).toBeFocused();
+  await levelField.press("Escape");
   await expect(levelName(page, "RDC")).toBeFocused();
 });
 

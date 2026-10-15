@@ -514,66 +514,70 @@ function LevelSection({
               </span>
             )}
           </div>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={`Actions du niveau ${level.name}`}
-                className="text-muted-foreground"
-              >
-                <EllipsisVertical />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="end"
-              onCloseAutoFocus={(event) => {
-                const then = afterMenu.current;
-                afterMenu.current = null;
-                if (!then) return;
-                event.preventDefault();
-                then();
-              }}
-            >
-              <DropdownMenuItem
-                onSelect={() => {
-                  afterMenu.current = () => {}; // the rename field has taken the focus
-                  setRenaming(true);
+          {/* Gone while renaming, as in a room's row: a menu still closing would keep the focus
+              trapped and take it from the rename field, so no keyboard would open. */}
+          {renaming ? null : (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`Actions du niveau ${level.name}`}
+                  className="text-muted-foreground"
+                >
+                  <EllipsisVertical />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
+                onCloseAutoFocus={(event) => {
+                  const then = afterMenu.current;
+                  afterMenu.current = null;
+                  if (!then) return;
+                  event.preventDefault();
+                  then();
                 }}
               >
-                <Pencil />
-                Renommer
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onSelect={() => {
-                  // The room field, which the menu would take the focus from as it closes.
-                  afterMenu.current = () => roomEntry(sectionRef.current, "field")?.focus();
-                  setAdding(true);
-                }}
-              >
-                <Plus />
-                Ajouter une pièce
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => void duplicate()}>
-                <Copy />
-                Dupliquer le niveau
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                variant="destructive"
-                onSelect={() => {
-                  // No level left: the screen's « Ajouter un niveau ».
-                  afterMenu.current = focusAfterDeleting(sectionRef.current, () =>
-                    document.querySelector<HTMLElement>('[data-slot="action-bar"] button'),
-                  );
-                  void remove();
-                }}
-              >
-                <Trash />
-                Supprimer le niveau
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+                <DropdownMenuItem
+                  onSelect={() => {
+                    afterMenu.current = () => {}; // the rename field has taken the focus
+                    setRenaming(true);
+                  }}
+                >
+                  <Pencil />
+                  Renommer
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={() => {
+                    // The room field, which the menu would take the focus from as it closes.
+                    afterMenu.current = () => roomEntry(sectionRef.current, "field")?.focus();
+                    setAdding(true);
+                  }}
+                >
+                  <Plus />
+                  Ajouter une pièce
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => void duplicate()}>
+                  <Copy />
+                  Dupliquer le niveau
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  variant="destructive"
+                  onSelect={() => {
+                    // No level left: the screen's « Ajouter un niveau ».
+                    afterMenu.current = focusAfterDeleting(sectionRef.current, () =>
+                      document.querySelector<HTMLElement>('[data-slot="action-bar"] button'),
+                    );
+                    void remove();
+                  }}
+                >
+                  <Trash />
+                  Supprimer le niveau
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           <DragHandle
             ref={setActivatorNodeRef}
             label={`Déplacer le niveau ${level.name}`}
