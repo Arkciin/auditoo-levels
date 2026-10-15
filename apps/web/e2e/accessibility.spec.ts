@@ -3,8 +3,11 @@ import {
   addLevel,
   backToList,
   createProperty,
+  deleteButton,
   expect,
   expectSynced,
+  levelAction,
+  levelHeader,
   offlineBanner,
   propertyRow,
   room,
@@ -93,6 +96,35 @@ test("structure: levels, rooms, renaming, menus and the undo toast", async ({ pa
   await swipeLeft(room(page, "RDC", "Séjour"));
   await expect(toast(page, "Pièce « Séjour » supprimée")).toBeVisible();
   await expectAccessible(page, "undo toast");
+});
+
+test("structure: a room's menu, « Déplacer vers… », a level copy, a revealed delete button", async ({
+  page,
+}) => {
+  await createProperty(page, uniqueName("Maison"));
+  await addLevel(page, "RDC");
+  await typeRooms(page, "RDC", ["Entrée", "Cuisine"]);
+  await addLevel(page, "R+1");
+  await typeRooms(page, "R+1", ["Chambre 1"]);
+
+  await page.getByRole("button", { name: "Actions de la pièce Cuisine", exact: true }).tap();
+  await expectAccessibleMenu(page, "menu of a room");
+  await page.getByRole("menuitem", { name: "Déplacer vers…", exact: true }).tap();
+  const moveSheet = page.getByRole("dialog", { name: "Déplacer « Cuisine »" });
+  await expect(moveSheet).toBeVisible();
+  await expectAccessible(page, "« Déplacer vers… » sheet");
+  await page.keyboard.press("Escape");
+  await expect(moveSheet).toBeHidden();
+
+  await levelAction(page, "R+1", "Dupliquer le niveau");
+  await expect(toast(page, "Niveau « R+1 » dupliqué en « R+2 » avec sa pièce")).toBeVisible();
+  await expectAccessible(page, "a level just copied, tinted, and its toast");
+
+  await swipeLeft(levelHeader(page, "R+2"));
+  const remove = deleteButton(page, "le niveau « R+2 »");
+  await expect(remove).toBeVisible();
+  await expectAccessible(page, "the delete button a swipe reveals");
+  await expect(remove, "still revealed after both scans").toBeVisible();
 });
 
 test("sync status: the details sheet, offline banner and pending changes", async ({
