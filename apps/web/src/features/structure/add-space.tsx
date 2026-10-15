@@ -1,4 +1,4 @@
-import { type Level, newId, positionAtEnd, type Space } from "@repo/shared";
+import { type Level, NAME_MAX_LENGTH, newId, positionAtEnd, type Space } from "@repo/shared";
 import { Plus } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -8,13 +8,13 @@ import { Input } from "@/components/ui/input";
 import { useSafeMutate } from "@/features/use-safe-mutate";
 import { haptic } from "@/lib/haptics";
 import { keepInSight } from "@/lib/keep-in-sight";
-import { nextSpaceName, suggestSpaceNames } from "@/lib/suggestions";
+import { nextSpaceName, suggestSpaceNames, typedSpaceName } from "@/lib/suggestions";
 import { selectStructure, useSyncClient } from "@/sync";
 import { useHighlight } from "./highlight";
 
 /**
  * Rapid room entry at the end of a level: type and press Enter to chain rooms, or tap a
- * suggestion ("Chambre" becomes "Chambre 3" when two bedrooms already exist).
+ * suggestion ("Chambre", tapped or typed, becomes "Chambre 3" when two bedrooms already exist).
  */
 export function AddSpace({
   propertyId,
@@ -104,7 +104,7 @@ export function AddSpace({
     const name = draft.trim();
     if (!name) return;
     setDraft("");
-    add(() => name, { tapped: false });
+    add((names) => typedSpaceName(name, names), { tapped: false });
   }
 
   function add(
@@ -180,7 +180,7 @@ export function AddSpace({
             placeholder="Nom de la pièce"
             autoComplete="off"
             enterKeyHint="send"
-            maxLength={80}
+            maxLength={NAME_MAX_LENGTH}
             data-no-swipe
             autoFocus
           />

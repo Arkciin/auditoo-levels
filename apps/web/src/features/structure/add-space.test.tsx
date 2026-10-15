@@ -113,6 +113,16 @@ describe("AddSpace", () => {
     await waitFor(() => expect(roomNames()).toEqual(["Chambre 2", "Chambre 3"]));
   });
 
+  it("numbers a bedroom typed in full as its suggestion would", async () => {
+    const user = renderLevel();
+    await openRoomField(user);
+
+    await user.type(roomField(), "chambre{Enter}");
+    fireEvent.click(suggestion("Chambre"));
+
+    await waitFor(() => expect(roomNames()).toEqual(["Chambre 2", "Chambre 3"]));
+  });
+
   it("numbers a repeated room from its second occurrence", async () => {
     const user = renderLevel();
     await openRoomField(user);
