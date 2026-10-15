@@ -14,7 +14,7 @@ import {
   waitForState,
 } from "@/sync/test-support/harness";
 import { OfflineBanner } from "./offline-banner";
-import { describeNextAttempt, presentStatus, SyncIndicator } from "./sync-indicator";
+import { describeNextAttempt, pillName, presentStatus, SyncIndicator } from "./sync-indicator";
 
 const RETRY_PROMISE =
   " Vos modifications restent sur cet appareil et Relevé réessaie automatiquement.";
@@ -93,7 +93,7 @@ describe("presentStatus", () => {
 
   it("does not send a user with a network looking for one when the server does not answer", () => {
     expect(presentStatus(status({ connection: "unreachable" })).explanation).toBe(
-      "Le serveur ne répond pas : le réseau est peut-être trop faible, ou le serveur redémarre. Vos modifications sont enregistrées sur cet appareil et partiront dès qu’il répondra.",
+      "Le serveur ne répond pas\u00a0: le réseau est peut-être trop faible, ou le serveur redémarre. Vos modifications sont enregistrées sur cet appareil et partiront dès qu’il répondra.",
     );
   });
 
@@ -115,17 +115,53 @@ describe("presentStatus", () => {
   });
 });
 
+describe("pillName", () => {
+  it.each([
+    ["everything saved", status(), "À jour. Voir le détail"],
+    [
+      "a change waiting",
+      status({ pendingCount: 1 }),
+      "En attente, 1\u00a0modification. Voir le détail",
+    ],
+    [
+      "changes being sent",
+      status({ phase: "syncing", sending: true, pendingCount: 3 }),
+      "Envoi…, 3\u00a0modifications. Voir le détail",
+    ],
+    [
+      "no network",
+      status({ connection: "offline", pendingCount: 14 }),
+      "Hors ligne, 14\u00a0modifications en attente. Voir le détail",
+    ],
+    [
+      "a server that does not answer",
+      status({ connection: "unreachable", pendingCount: 2 }),
+      "Serveur injoignable, 2\u00a0modifications en attente. Voir le détail",
+    ],
+    [
+      "a failed sync",
+      status({ phase: "error", lastError: "Erreur 503.", pendingCount: 2 }),
+      "Erreur de synchronisation, 2\u00a0modifications en attente. Voir le détail",
+    ],
+  ])("starts with what the pill shows: %s", (_, input, name) => {
+    expect(pillName(input)).toBe(name);
+    // Label in name (WCAG 2.5.3): speech input users say the words they see, badge included.
+    expect(name.startsWith(presentStatus(input).short)).toBe(true);
+    if (input.pendingCount > 0) expect(name).toContain(`, ${input.pendingCount}\u00a0`);
+  });
+});
+
 describe("describeNextAttempt", () => {
   const now = 1_000_000;
 
   it("counts down to the automatic retry of a failed sync, in whole seconds", () => {
     const failed = (inMs: number) =>
       describeNextAttempt(status({ connection: "unreachable", nextAttemptAt: now + inMs }), now);
-    expect(failed(12_000)).toBe("Nouvel essai automatique dans 12 s.");
-    expect(failed(11_200)).toBe("Nouvel essai automatique dans 12 s.");
-    expect(failed(-300)).toBe("Nouvel essai automatique dans 1 s."); // the clock lags
+    expect(failed(12_000)).toBe("Nouvel essai automatique dans 12\u00a0s.");
+    expect(failed(11_200)).toBe("Nouvel essai automatique dans 12\u00a0s.");
+    expect(failed(-300)).toBe("Nouvel essai automatique dans 1\u00a0s."); // the clock lags
     const error = status({ phase: "error", lastError: "Erreur 503.", nextAttemptAt: now + 4_000 });
-    expect(describeNextAttempt(error, now)).toBe("Nouvel essai automatique dans 4 s.");
+    expect(describeNextAttempt(error, now)).toBe("Nouvel essai automatique dans 4\u00a0s.");
   });
 
   it("says when the retry runs, and nothing when nothing failed", () => {
@@ -187,7 +223,7 @@ describe("SyncIndicator", () => {
     await synced.syncNow();
     renderIndicator(synced);
 
-    expect(pill()).toHaveAccessibleName("Tout est à jour. Voir le détail");
+    expect(pill()).toHaveAccessibleName("À jour. Voir le détail");
     expect(pill()).toHaveTextContent("À jour");
   });
 
@@ -250,9 +286,7 @@ describe("SyncIndicator", () => {
     await addHouse(device, ["Cuisine"]);
     renderIndicator(device);
 
-    expect(pill()).toHaveAccessibleName(
-      "Modifications en attente, 3\u00a0modifications en attente. Voir le détail",
-    );
+    expect(pill()).toHaveAccessibleName("En attente, 3\u00a0modifications. Voir le détail");
     expect(within(pill()).getByText("3")).toBeVisible();
   });
 
@@ -278,6 +312,9 @@ describe("SyncIndicator", () => {
     await waitForState(device, (s) => s.status.nextAttemptAt !== null);
     const user = renderIndicator(device);
 
+    expect(pill()).toHaveAccessibleName(
+      "Serveur injoignable, 1\u00a0modification en attente. Voir le détail",
+    );
     expect(pill()).toHaveTextContent("Serveur injoignable");
     expect(offlineBanner()).not.toBeInTheDocument(); // It would send the user looking for a network.
 
@@ -309,7 +346,7 @@ describe("SyncIndicator", () => {
     await broken.syncNow();
     renderIndicator(broken);
 
-    expect(pill()).toHaveAccessibleName("La synchronisation a échoué. Voir le détail");
+    expect(pill()).toHaveAccessibleName("Erreur de synchronisation. Voir le détail");
     expect(pill()).toHaveTextContent("Erreur");
   });
 

@@ -66,7 +66,7 @@ export function presentStatus(status: SyncStatus): StatusPresentation {
       short: "Serveur injoignable",
       title: "Serveur injoignable",
       explanation:
-        "Le serveur ne répond pas : le réseau est peut-être trop faible, ou le serveur redémarre. Vos modifications sont enregistrées sur cet appareil et partiront dès qu’il répondra.",
+        "Le serveur ne répond pas\u00a0: le réseau est peut-être trop faible, ou le serveur redémarre. Vos modifications sont enregistrées sur cet appareil et partiront dès qu’il répondra.",
     };
   }
   // Until a cycle succeeds: a retry in progress must not read « À jour » meanwhile.
@@ -121,23 +121,38 @@ const toneClasses: Record<Tone, string> = {
   error: "bg-destructive/10 text-destructive",
 };
 
+/**
+ * The pill's accessible name: its visible text first, then what its badge counts, then what a tap
+ * does, e.g. « Hors ligne, 14 modifications en attente. Voir le détail ». Speech input users name a
+ * control by the words they see (WCAG 2.5.3, label in name).
+ */
+export function pillName(status: SyncStatus): string {
+  const { tone, short } = presentStatus(status);
+  const parts = [tone === "error" ? `${short} de synchronisation` : short];
+  if (status.pendingCount > 0) {
+    // « En attente » and « Envoi… » already say what the changes are waiting for.
+    const [one, many] =
+      tone === "pending" || tone === "syncing"
+        ? ["modification", "modifications"]
+        : ["modification en attente", "modifications en attente"];
+    parts.push(plural(status.pendingCount, one, many));
+  }
+  return `${parts.join(", ")}. Voir le détail`;
+}
+
 /** Header pill showing the sync health; opens a sheet listing what is still on the device. */
 export function SyncIndicator() {
   const status = useSyncStatus();
   const [open, setOpen] = useState(false);
   const presentation = presentStatus(status);
   const Icon = presentation.icon;
-  const pending =
-    status.pendingCount > 0
-      ? `, ${plural(status.pendingCount, "modification en attente", "modifications en attente")}`
-      : "";
 
   return (
     <Drawer open={open} onOpenChange={setOpen}>
       <DrawerTrigger asChild>
         <button
           type="button"
-          aria-label={`${presentation.title}${pending}. Voir le détail`}
+          aria-label={pillName(status)}
           className={cn(
             "relative flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3 text-sm font-semibold transition-colors after:absolute after:inset-x-0 after:-inset-y-1",
             toneClasses[presentation.tone],
@@ -171,7 +186,7 @@ export function describeNextAttempt(status: SyncStatus, now: number): string | n
   if (status.connection === "offline") return null;
   if (status.nextAttemptAt !== null) {
     const seconds = Math.max(1, Math.ceil((status.nextAttemptAt - now) / 1000));
-    return `Nouvel essai automatique dans ${seconds} s.`;
+    return `Nouvel essai automatique dans ${seconds}\u00a0s.`;
   }
   const failing = status.connection === "unreachable" || status.lastError !== null;
   return failing && status.phase === "syncing" ? "Nouvel essai en cours…" : null;

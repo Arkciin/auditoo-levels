@@ -93,7 +93,10 @@ export function uniqueName(prefix: string): string {
 
 // --- Sync status ---------------------------------------------------------------------------------
 
-/** The header pill; its accessible name spells out the sync state and the pending count. */
+/**
+ * The header pill. Its accessible name starts with what it shows, then spells out the pending
+ * count: « Hors ligne, 3 modifications en attente. Voir le détail ».
+ */
 export function syncPill(page: Page): Locator {
   return page.getByRole("button", { name: /Voir le détail$/ });
 }
@@ -106,7 +109,7 @@ export function syncPill(page: Page): Locator {
  * the pill may still show the state from before the change.
  */
 export async function expectSynced(page: Page): Promise<void> {
-  await expect(syncPill(page)).toHaveAccessibleName("Tout est à jour. Voir le détail");
+  await expect(syncPill(page)).toHaveAccessibleName("À jour. Voir le détail");
 }
 
 /**

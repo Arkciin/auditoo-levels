@@ -100,7 +100,8 @@ pnpm vitest run apps/web/src/sync/convergence.test.ts
   one) for « … » with non-breaking spaces and `plural()` for counts ("3 pièces").
 - **Touch first.** `Button` sizes give 44 px targets; inputs keep `text-base` (16 px, or iOS zooms
   in); interactive elements inside a swipeable row get `data-no-swipe`; every control has an
-  accessible French name, which the e2e and component tests select by.
+  accessible French name, which the e2e and component tests select by, and which starts with its
+  visible text when it has some (WCAG 2.5.3: speech input users say what they see).
 - **Reading data**: components use `useView(selector)` with selectors memoized per snapshot
   (`apps/web/src/sync/selectors.ts`), and `useSyncStatus()` for the status alone. Event handlers
   that compute a position or a name read `client.getState().view`: taps can outrun React renders.
