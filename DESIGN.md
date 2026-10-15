@@ -420,7 +420,8 @@ hold exactly the server's state with an empty outbox, no mutation may be lost or
 device may have reported a change as not applying; invariants must hold (parents exist, positions
 valid, no room left its logement), and all 15 mutation kinds must have run. Four more seeds also
 wipe the server's database twice: there, every mutation the final database rejected must have
-been reported to its device, lost responses and restarts included.
+been reported to its device, lost responses and restarts included. In all of them, no create may
+ever have met an existing id, on the server or on a device.
 
 The server was also checked by hand against PostgreSQL 16: concurrent migrations, 12 devices × 25
 mutations racing two server instances, gapless versions; and the whole end-to-end suite passes

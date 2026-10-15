@@ -21,7 +21,10 @@
  * - when the server's database is replaced (another epoch), the device starts over from the new
  *   database's data and pushes its pending mutations again, none of them skipped;
  * - no change disappears without a word: one the server rejects, or that no longer applies to
- *   newer server data, is reported (`rejections`, `onRejected`) once it leaves the view.
+ *   newer server data, is reported (`rejections`, `onRejected`) once it leaves the view;
+ * - no queued change can stop the device from starting or syncing: one this version cannot read
+ *   or replay (another version queued it) only does not apply here, and every push fits the
+ *   server's body limit.
  */
 import {
   applyMutation,

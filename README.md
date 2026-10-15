@@ -48,8 +48,9 @@ wake the server. Once visited, the app opens from its cache and syncs when the s
   (« Déplacer vers… »).
 - **Offline-first**: the app opens without network, every change appears instantly and is stored
   on the device, and everything syncs by itself when the connection returns.
-- **Visible sync status**: a header pill (À jour, En attente, Envoi…, Hors ligne, Erreur), an
-  offline banner, the list of pending changes and a "Synchroniser maintenant" button.
+- **Visible sync status**: a header pill (À jour, En attente, Envoi…, Hors ligne, Serveur
+  injoignable, Erreur), an offline banner, the list of pending changes and a "Synchroniser
+  maintenant" button.
 - **Several devices**: changes reach the other devices within seconds (server-sent events), and
   conflicts resolve the same way everywhere (see [DESIGN.md](DESIGN.md#conflict-policy)).
 - **Fast entry on site**: one-tap level and room suggestions in French, smart numbering
