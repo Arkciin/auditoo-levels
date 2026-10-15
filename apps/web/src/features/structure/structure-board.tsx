@@ -520,6 +520,7 @@ function LevelSection({
                   size="icon"
                   aria-label={`Actions du niveau ${level.name}`}
                   className="text-muted-foreground"
+                  data-no-swipe
                 >
                   <EllipsisVertical />
                 </Button>

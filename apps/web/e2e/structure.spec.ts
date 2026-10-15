@@ -129,6 +129,21 @@ test("rename a room in place, undo the deletion of a room or a level", async ({ 
     await expect(structureSummary(page)).toHaveText("2 niveaux, 5 pièces");
   });
 
+  await test.step("a swipe that starts on a level's menu button does not swipe", async () => {
+    const menu = page.getByRole("button", { name: "Actions du niveau R+1", exact: true });
+    await swipeLeft(levelHeader(page, "R+1"), { from: menu });
+    await nextFrames(page);
+    // The menu opens as the finger lands, hiding the rest of the page from role queries.
+    const remove = page.getByRole("button", {
+      name: "Supprimer le niveau « R+1 »",
+      exact: true,
+      includeHidden: true,
+    });
+    await expect(remove).toBeHidden();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu")).toBeHidden();
+  });
+
   await test.step("swipe a level, tap « Supprimer », then undo", async () => {
     const message = "Niveau « R+1 » supprimé avec ses 2 pièces";
     await swipeLeft(levelHeader(page, "R+1"));

@@ -375,7 +375,7 @@ type SwipeProbe = { e2eFingerOnRow?: boolean };
  * (Playwright's touchscreen only taps). A mouse drag is no substitute: on a link (a logement's
  * row), it starts the browser's native drag and drop, which cancels the pointer.
  */
-export async function swipeLeft(row: Locator): Promise<void> {
+export async function swipeLeft(row: Locator, { from }: { from?: Locator } = {}): Promise<void> {
   const page = row.page();
   const cdp = await touchSession(page);
   const touch = (type: "touchStart" | "touchMove", x: number, y: number) =>
@@ -387,10 +387,13 @@ export async function swipeLeft(row: Locator): Promise<void> {
     );
     const box = await row.boundingBox();
     if (!box) throw new Error("The row to swipe is not visible");
-    const y = box.y + box.height / 2;
-    // On the name, clear of the buttons at the right (menu, drag handle): they never swipe.
-    const fromX = box.x + box.width * 0.6;
-    const toX = box.x + box.width * 0.1;
+    // On the name, clear of the buttons at the right (menu, drag handle), which never swipe,
+    // unless the test says where the finger lands.
+    const start = from ? await from.boundingBox() : box;
+    if (!start) throw new Error("Where the swipe starts is not visible");
+    const y = start.y + start.height / 2;
+    const fromX = from ? start.x + start.width / 2 : box.x + box.width * 0.6;
+    const toX = fromX - box.width * 0.5;
 
     // The row may move between measuring it and touching it: the list of logements changes
     // whenever another test adds one. Lift the finger if it landed elsewhere, and try again.
