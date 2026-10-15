@@ -406,7 +406,7 @@ const MAX_DRAG_PX = 800;
  *
  * Steering by the announcement, the feedback the app gives screen reader users, rather than by
  * coordinates computed beforehand keeps this independent of the layout, which changes during a
- * drag: levels shrink to their headers, a room entering another level pushes its new neighbours.
+ * drag: a room entering another level pushes its new neighbours.
  */
 export async function dragOnto(
   handle: Locator,

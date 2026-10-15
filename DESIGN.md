@@ -318,7 +318,8 @@ that the list stays strictly ordered with valid keys; 500 appends keep keys at 8
 - **First load.** `index.html` preloads the home screen's code and its typeface, which the router
   would otherwise only request once the app runs; the build writes Brotli copies of its text
   files, sent to browsers that accept them; the first render is a React transition, so it runs in
-  short slices rather than one long task. CI keeps the bundle within a budget (`pnpm size`).
+  short slices rather than one long task, and bottom sheets only mount on their first opening (vaul
+  measures the window as a drawer mounts). CI keeps the bundle within a budget (`pnpm size`).
 
 ## Security headers
 
@@ -350,8 +351,10 @@ that the list stays strictly ordered with valid keys; 500 appends keep keys at 8
 | **Show where things land** | A level copied, a room moved by menu or just added is tinted for a moment (a static tint with reduced motion), and scrolled into view when it may be out of sight. The room field and its suggestions stay clear of the action bar and the keyboard as rooms pile up above them. |
 | **Rapid room entry** | After Enter the room field stays focused and empty, so rooms are typed in a row. Chips suggest rooms that fit the level: Cave or Chaufferie in a basement, Chambre upstairs. |
 | **Smart numbering** | "Chambre" is always numbered (Chambre 1, Chambre 2…); other rooms only when they repeat (Cuisine, then Cuisine 2), counted across the whole logement (`apps/web/src/lib/suggestions.ts`). |
-| **Levels go where they belong** | French level names are ranked (Sous-sol below RDC, R+n or "2e étage" above, Combles on top), so a Sous-sol added after the RDC is inserted below it; unknown names go last. The sheet offers the likely next levels in one tap. |
-| **Undo instead of "Are you sure?"** | Deletes are soft, so each one shows a 6 s toast with "Annuler", which queues a `restore*` mutation (offline too). A confirmation dialog would tax every delete to protect the rare mistake. |
+| **Levels go where they belong** | French level names are ranked from the lowest floor to the highest (Sous-sol, RDC, R+n or "2e étage", Combles), the order the screen lists them in, top to bottom: a Sous-sol added after the RDC is inserted before it; unknown names go last. The sheet offers the likely next levels in one tap. |
+| **Undo instead of "Are you sure?"** | Deletes are soft, so each one shows a 6 s toast with "Annuler", which queues a `restore*` mutation (offline too). A confirmation dialog would tax every delete to protect the rare mistake. Later, « Logements supprimés » (home menu) and « Éléments supprimés » (a logement's menu) list what was deleted, last first, to restore it; a level comes back with its rooms. |
+| **Back is back** | A logement's back arrow goes back in history when the list is behind it, and otherwise replaces the logement with the list, as does deleting it from its screen: the system back button never reopens a logement just left, nor shows one just deleted. |
+| **Names in full** | A logement's name, often a long address, heads its screen as a large title over as many lines as it needs; the header shows it, truncated, only once it has scrolled under it, as iOS large titles do. |
 | **Sync status always in view** | A header pill (À jour, En attente with a count, Envoi…, Hors ligne, Erreur) opens a sheet listing pending changes in plain French, with a "Synchroniser maintenant" button; a banner says what happens to work done offline. |
 | **No silent rejection** | A change the server refuses, or that no longer applies, gets an error toast saying which and why, and stays listed in the sync sheet ("modifications non appliquées"), whose relative times keep ticking while it is open. |
 | **Legibility on site** | Atkinson Hyperlegible Next, designed by the Braille Institute for low-vision readers, for dim basements and glare; 16 px body text; one brand colour (forest `#033527`) and one accent; field outlines at 3:1 contrast. |
@@ -438,8 +441,9 @@ budget and end-to-end tests on every push.
 - **No authentication or tenant scoping**: every device pulls everything. Next: accounts, pulls
   scoped to an organisation, permission checks in the server's mutator transaction.
 - **Tombstones are never collected**: deleted rows, old `clients` rows and `rejected_mutations`
-  stay forever. Next: purge rows deleted long ago and send `reset` to devices whose cursor predates
-  the purge. Rejections need more care: a device announces one only once a pull confirms it, so a
+  stay forever, and the sheets of deleted items list them all. Next: purge rows deleted long ago
+  (the sheets then saying for how long they keep them) and send `reset` to devices whose cursor
+  predates the purge. Rejections need more care: a device announces one only once a pull confirms it, so a
   record may only go once its device is known to have pulled past it.
 - **SSE pokes are in-process**: several instances would need Postgres `LISTEN/NOTIFY`.
 - **Concurrent renames are whole-field last-write-wins**, with no merge and no conflict UI.

@@ -40,7 +40,8 @@ wake the server. Once visited, the app opens from its cache and syncs when the s
 ## Features
 
 - **Logements, levels, rooms**: add them, rename in place (tap the name), delete with a swipe or
-  from their ⋮ menu, and undo from the toast.
+  from their ⋮ menu, and undo from the toast, or later from « Logements supprimés » and « Éléments
+  supprimés » in the ⋮ menus.
 - **Duplicate a level** with its rooms, for identical floors: R+1 becomes R+2, bedrooms take the
   next numbers (Chambre 4, Chambre 5), and the copy can be undone.
 - **Drag and drop** by the grip handle: reorder rooms within a level, move a room to another level,
@@ -53,8 +54,8 @@ wake the server. Once visited, the app opens from its cache and syncs when the s
 - **Several devices**: changes reach the other devices within seconds (server-sent events), and
   conflicts resolve the same way everywhere (see [DESIGN.md](DESIGN.md#conflict-policy)).
 - **Fast entry on site**: one-tap level and room suggestions in French, smart numbering
-  (Chambre 1, Chambre 2…), levels placed where they belong (Sous-sol below RDC), and an example
-  house to try it all.
+  (Chambre 1, Chambre 2…), levels listed from the lowest to the highest (a Sous-sol added after the
+  RDC goes before it), and an example house to try it all.
 - **Installable PWA**: « Installer l'application » in the home screen's menu (the browser's prompt,
   or Safari's steps on iPhone and iPad), a toast once the app works offline, an update prompt.
 - **Mobile-first** (Chrome on Android, Safari on iOS): French UI, dark mode, 44 px touch targets,
@@ -93,7 +94,7 @@ Then switch the network off in the browser's developer tools and keep working.
 | `pnpm start` | Production server: API and built PWA on port 3000 |
 | `pnpm test` | All unit, integration and component tests (Vitest); no database needed |
 | `pnpm test:watch` | The same, in watch mode |
-| `pnpm e2e` | End-to-end tests (Playwright) against the production build: run `pnpm build` first |
+| `pnpm e2e` | End-to-end tests (Playwright) against the production build: run `pnpm build` first. `E2E_PORT` picks the server's port (default 4174), e.g. to run two checkouts side by side |
 | `pnpm typecheck` | `tsc` in every workspace, service worker included |
 | `pnpm lint` / `pnpm format` | Biome: check, or fix formatting, lint issues and import order |
 | `pnpm check` | `lint`, `typecheck` and `test` |
@@ -165,7 +166,7 @@ pnpm build && pnpm e2e    # 16 end-to-end tests, accessibility and security incl
   delete (thresholds, flicks, axis lock, the swallowed click, failed deletions), renaming in place,
   rapid room entry, the sync indicator. They live next to the components (`*.test.tsx`).
 - **End-to-end tests** (Playwright) drive an emulated Pixel 7 against the production server, which
-  they start on port 4174 with a fresh in-memory database. Every test fails on an uncaught
+  they start on port 4174 (or `E2E_PORT`) with a fresh in-memory database. Every test fails on an uncaught
   exception or a Content Security Policy violation. An accessibility spec scans every screen,
   sheet, menu, field and banner with [axe](https://github.com/dequelabs/axe-core) (WCAG 2.2 A and
   AA, best practices), in light and dark mode: a serious or critical violation fails it. Install
