@@ -363,12 +363,13 @@ function touchSession(page: Page): Promise<CDPSession> {
   return session;
 }
 
-/** Set by the page when the finger of a swipe lands: on the row to swipe or not. */
-type SwipeProbe = { e2eFingerOnRow?: boolean };
+/** Set by the page when the finger of a swipe lands: where the swipe starts or not. */
+type SwipeProbe = { e2eFingerOnTarget?: boolean };
 
 /**
  * Swipes `row` to the left with one finger, well past the 40 % of its width that deletes it (a
- * room), or reveals its « Supprimer » button (a level, a logement: see `deleteButton`).
+ * room), or reveals its « Supprimer » button (a level, a logement: see `deleteButton`). The finger
+ * lands on the name, or on `from`, an element of the row (one that must not start a swipe).
  *
  * Real touch input through the DevTools protocol, as a phone produces it: pointer events of type
  * "touch", with the browser's own hit testing, implicit pointer capture and `touch-action`
@@ -387,30 +388,31 @@ export async function swipeLeft(row: Locator, { from }: { from?: Locator } = {})
     );
     const box = await row.boundingBox();
     if (!box) throw new Error("The row to swipe is not visible");
-    // On the name, clear of the buttons at the right (menu, drag handle), which never swipe,
-    // unless the test says where the finger lands.
+    // Still, first: a row that was swiped open slides back with its buttons.
+    await from?.hover({ trial: true });
     const start = from ? await from.boundingBox() : box;
     if (!start) throw new Error("Where the swipe starts is not visible");
     const y = start.y + start.height / 2;
+    // On the name, clear of the buttons at the right (menu, drag handle): they never swipe.
     const fromX = from ? start.x + start.width / 2 : box.x + box.width * 0.6;
     const toX = fromX - box.width * 0.5;
 
     // The row may move between measuring it and touching it: the list of logements changes
     // whenever another test adds one. Lift the finger if it landed elsewhere, and try again.
-    await row.evaluate((element) => {
+    await (from ?? row).evaluate((element) => {
       const probe = window as SwipeProbe;
-      delete probe.e2eFingerOnRow;
+      delete probe.e2eFingerOnTarget;
       const record = (event: Event) => {
-        probe.e2eFingerOnRow = element.contains(event.target as Node);
+        probe.e2eFingerOnTarget = element.contains(event.target as Node);
       };
       document.addEventListener("pointerdown", record, { once: true, capture: true });
     });
     await touch("touchStart", fromX, y);
-    await page.waitForFunction(() => "e2eFingerOnRow" in window);
-    if (!(await page.evaluate(() => (window as SwipeProbe).e2eFingerOnRow))) {
+    await page.waitForFunction(() => "e2eFingerOnTarget" in window);
+    if (!(await page.evaluate(() => (window as SwipeProbe).e2eFingerOnTarget))) {
       await cdp.send("Input.dispatchTouchEvent", { type: "touchCancel", touchPoints: [] });
       if (attempt < SWIPE_ATTEMPTS) continue;
-      throw new Error("The finger kept landing outside the row to swipe");
+      throw new Error("The finger kept landing outside where the swipe starts");
     }
 
     // One move per frame, as a finger does. Moves sent back to back make a swipe of several
