@@ -1,4 +1,4 @@
-import { clientTag, MAX_MUTATIONS_PER_PUSH, MutationRejectedError } from "@repo/shared";
+import { clientTag, MAX_MUTATIONS_PER_PUSH, MutationRejectedError, mutators } from "@repo/shared";
 import { IDBFactory } from "fake-indexeddb";
 import { wrap } from "idb";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -839,6 +839,91 @@ describe("changes that do not apply", () => {
     expect(server.rejected.map((mutation) => mutation.id)).toEqual([2]);
     expect(client.getState().pending).toEqual([]);
     expect(rowsOf(client.getState().view)).toEqual(rowsOf(server.snapshot()));
+  });
+
+  it("starts with queued changes whose arguments it cannot read (from another version)", async () => {
+    // Written under other rules: by an older version, before they tightened, or by a newer one,
+    // then rolled back. Neither may lock the device out (« Stockage indisponible » for good).
+    const server = new MemoryServer();
+    const indexedDB = new IDBFactory();
+    const other = await openSyncStorage({ indexedDB });
+    await other.enqueue({ name: "createProperty", args: { id: P1, name: "Maison" }, timestamp: 1 });
+    // Typing boundary: what other versions of the app left in the outbox.
+    const unreadable = [
+      { name: "renameProperty", args: null, timestamp: 2 }, // its mutator would throw
+      { name: "renameProperty", args: { id: P1, name: 42 }, timestamp: 3 }, // or write garbage
+      { name: "createLevel", args: { id: L1, propertyId: P1 }, timestamp: 4 },
+    ] as unknown as MutationDraft[];
+    for (const draft of unreadable) await other.enqueue(draft);
+    await other.enqueue({ name: "createProperty", args: { id: P2, name: "Villa" }, timestamp: 5 });
+    other.close();
+
+    const client = await createClient({ indexedDB, transport: new MemoryTransport(server) });
+
+    const { view, pending, rejections, base } = client.getState();
+    expect(rowsOf(view)).toEqual({
+      properties: [
+        { id: P1, name: "Maison", createdAt: 1, deletedAt: null },
+        { id: P2, name: "Villa", createdAt: 5, deletedAt: null },
+      ],
+      levels: [],
+      spaces: [],
+    });
+    // Listed as not applying, without a toast at startup, and kept for the server to judge.
+    const otherVersion =
+      "Une modification faite avec une autre version de Relevé n'a pas pu être appliquée.";
+    expect(rejections.map(({ mutationId, message }) => [mutationId, message])).toEqual([
+      [4, otherVersion],
+      [3, otherVersion],
+      [2, otherVersion],
+    ]);
+    expect(describePendingMutations(base, pending)).toEqual([
+      french("Logement « Maison » créé"),
+      "Modification faite avec une autre version de Relevé",
+      "Modification faite avec une autre version de Relevé",
+      "Modification faite avec une autre version de Relevé",
+      french("Logement « Villa » créé"),
+    ]);
+
+    await client.syncNow(); // The server rejects them as invalid; the others go through.
+    expect(server.rejected.map((mutation) => mutation.id)).toEqual([2, 3, 4]);
+    expect(client.getState().pending).toEqual([]);
+    expect(rowsOf(client.getState().view)).toEqual(rowsOf(server.snapshot()));
+  });
+
+  it("starts when a mutator throws anything at all on a queued change, which the server judges", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const server = new MemoryServer();
+    const indexedDB = new IDBFactory();
+    const storage = await openSyncStorage({ indexedDB });
+    await storage.enqueue({
+      name: "createProperty",
+      args: { id: P1, name: "Maison" },
+      timestamp: 1,
+    });
+    await storage.enqueue({
+      name: "renameProperty",
+      args: { id: P1, name: "Villa" },
+      timestamp: 2,
+    });
+    storage.close();
+    // A bug, or a mutator meeting data another version wrote: not a MutationRejectedError.
+    const failure = new TypeError("Cannot read properties of undefined (reading 'name')");
+    const rename = vi.spyOn(mutators, "renameProperty").mockRejectedValue(failure);
+
+    const client = await createClient({ indexedDB, transport: new MemoryTransport(server) });
+
+    expect(client.getState().view.properties.get(P1)?.name).toBe("Maison");
+    expect(client.getState().rejections).toEqual([
+      expect.objectContaining({ mutationId: 2, reason: "not_applicable" }),
+    ]);
+    expect(error).toHaveBeenCalledExactlyOnceWith("Queued mutation 2 failed to replay", failure);
+    expect(client.getState().pending).toHaveLength(2); // Kept for the server to judge.
+
+    rename.mockRestore(); // The server runs it and accepts it: it has the last word.
+    await client.syncNow();
+    expect(client.getState().pending).toEqual([]);
+    expect(client.getState().view.properties.get(P1)?.name).toBe("Villa");
   });
 
   it(`keeps the latest ${MAX_RECENT_REJECTIONS} rejections, newest first`, async () => {

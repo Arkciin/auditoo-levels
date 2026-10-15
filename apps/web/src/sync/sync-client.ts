@@ -32,9 +32,11 @@ import {
   type Mutation,
   type MutationArgs,
   type MutationName,
+  MutationRejectedError,
   mutationArgsSchemas,
   type PullResponse,
   type PushResponse,
+  readStoredMutation,
   type Snapshot,
   SnapshotTx,
 } from "@repo/shared";
@@ -203,6 +205,7 @@ interface SyncWaiter {
 interface Refusal {
   readonly mutation: Mutation;
   readonly against: Snapshot;
+  readonly error: unknown;
 }
 
 /**
@@ -292,7 +295,9 @@ export class SyncClient {
    * talk to the server until {@link SyncClient.start} or {@link SyncClient.syncNow} is called.
    */
   static async create(options: SyncClientOptions): Promise<SyncClient> {
-    const stored = await options.storage.loadState();
+    const stored = readStoredState(await options.storage.loadState());
+    // Never throws: a queued change this version cannot replay is listed as not applying, not a
+    // reason to refuse to start (the page would say « Stockage indisponible » for good).
     const { view, refused } = await replay(stored.base, stored.pending);
     // Without WebCrypto (plain HTTP from another host than localhost), every poke counts as
     // another device's: one pull too many after each push, as before pokes named their pusher.
@@ -786,7 +791,12 @@ export class SyncClient {
     if (fresh.length === 0) return;
     const at = this.now();
     const rejections: Rejection[] = [];
-    for (const { mutation, against } of fresh) {
+    for (const { mutation, against, error } of fresh) {
+      // Not a verdict on the data, but a mutator failing on what another version queued, or a
+      // bug: worth a trace, once.
+      if (!(error instanceof MutationRejectedError)) {
+        console.error(`Queued mutation ${mutation.id} failed to replay`, error);
+      }
       const earlier = previous.pending.filter((other) => other.id < mutation.id);
       const before = await applyMutations(previous.base, earlier);
       const message = describeRejection(mutation, before, "not_applicable", against);
@@ -860,7 +870,7 @@ export class SyncClient {
       this.reloadScheduled = false;
       if (this.disposed) return;
       const previous = this.state;
-      const stored = await this.storage.loadState();
+      const stored = readStoredState(await this.storage.loadState());
       const { view, refused } = await replay(stored.base, stored.pending);
       // Another tab started over from a new database: what we know was acknowledged no longer is,
       // and the previous database's verdicts no longer stand.
@@ -956,7 +966,18 @@ async function dryRun(view: Snapshot, draft: MutationDraft): Promise<Snapshot> {
   return tx.commit();
 }
 
-/** The rebase: replays pending mutations on top of a server snapshot, noting those refused. */
+/**
+ * The stored state with its outbox as this version reads it: each entry validated, as another
+ * version of the app may have written it (see `readStoredMutation`).
+ */
+function readStoredState(stored: StoredState): StoredState {
+  return { ...stored, pending: stored.pending.map(readStoredMutation) };
+}
+
+/**
+ * The rebase: replays pending mutations on top of a server snapshot, noting those refused. Never
+ * throws: whatever stops a mutation here only means it does not apply on this device.
+ */
 async function replay(
   base: Snapshot,
   pending: readonly Mutation[],
@@ -964,8 +985,8 @@ async function replay(
   const refused: Refusal[] = [];
   // A refused mutation stays in the outbox: the server is authoritative and will settle it, after
   // which the next pull drops it like any processed mutation.
-  const view = await applyMutations(base, pending, (mutation, _error, against) => {
-    refused.push({ mutation, against });
+  const view = await applyMutations(base, pending, (mutation, error, against) => {
+    refused.push({ mutation, against, error });
   });
   return { view, refused };
 }

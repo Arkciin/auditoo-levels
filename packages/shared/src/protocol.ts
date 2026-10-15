@@ -71,6 +71,39 @@ export function applyMutation(tx: MutatorTx, mutation: Mutation): Promise<void> 
   return run(tx, mutation.args, { timestamp: mutation.timestamp });
 }
 
+/** Verdicts of {@link isReadable}, per mutation object. */
+const readable = new WeakMap<Mutation, boolean>();
+
+/**
+ * Whether this version can run, and read field by field, a mutation of a device's outbox: it
+ * follows today's `mutationSchema`. The outbox may hold entries another version of the app wrote,
+ * under other rules: an older one, or a newer one (then rolled back, or in another tab). Those
+ * stay queued for the server to judge, but the device neither replays nor describes them. Cached
+ * per object: a device replays its queue at every pull.
+ */
+export function isReadable(mutation: Mutation): boolean {
+  let verdict = readable.get(mutation);
+  if (verdict === undefined) {
+    verdict = mutationSchema.safeParse(mutation).success;
+    readable.set(mutation, verdict);
+  }
+  return verdict;
+}
+
+/**
+ * An outbox entry as this version reads it: parsed, hence normalized the way the server will apply
+ * it, or, when it breaks today's rules, as it is, which {@link isReadable} then says.
+ */
+export function readStoredMutation(entry: Mutation): Mutation {
+  const parsed = mutationSchema.safeParse(entry);
+  if (!parsed.success) {
+    readable.set(entry, false);
+    return entry;
+  }
+  readable.set(parsed.data, true);
+  return parsed.data;
+}
+
 /**
  * A mutation as a push carries it: only its envelope is checked when the request arrives. The
  * server then validates each mutation on its own with `mutationSchema`, and treats an invalid one

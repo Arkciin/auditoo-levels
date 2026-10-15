@@ -3,6 +3,7 @@ import { z } from "zod";
 import { type MutationArgs, mutationNames } from "./mutators";
 import {
   clientTag,
+  isReadable,
   MAX_MUTATIONS_PER_PUSH,
   type Mutation,
   type MutationEnvelope,
@@ -12,6 +13,7 @@ import {
   pushRequestSchema,
   pushResponseSchema,
   type ReceivedPushRequest,
+  readStoredMutation,
 } from "./protocol";
 import { idSchema } from "./schemas";
 
@@ -84,6 +86,25 @@ describe("mutationSchema", () => {
       MutationArgs<"moveSpace">
     >();
     expectTypeOf<Mutation["name"]>().toEqualTypeOf<(typeof mutationNames)[number]>();
+  });
+});
+
+describe("readStoredMutation", () => {
+  it("reads a valid outbox entry as the server will apply it", () => {
+    const stored = { ...valid, args: { id: PROPERTY, name: "  Maison ", colour: "vert" } };
+    const read = readStoredMutation(stored as MutationEnvelope as Mutation);
+
+    expect(read).toEqual(valid);
+    expect(isReadable(read)).toBe(true);
+  });
+
+  it("keeps an entry another version wrote under other rules as it is, marked unreadable", () => {
+    for (const entry of [invalidArgs, unknownName, { ...valid, args: null }]) {
+      // Typing boundary: what another version of the app may have left in the outbox.
+      const stored = entry as MutationEnvelope as Mutation;
+      expect(readStoredMutation(stored)).toBe(stored);
+      expect(isReadable(stored)).toBe(false);
+    }
   });
 });
 

@@ -5,7 +5,7 @@
  * confirmed by the server with the not-yet-confirmed local mutations replayed on top ("rebase").
  */
 import { MutationRejectedError, type MutatorTx } from "./mutators";
-import { applyMutation, type Mutation, type PullResponse } from "./protocol";
+import { applyMutation, isReadable, type Mutation, type PullResponse } from "./protocol";
 import type { Level, Property, Space } from "./schemas";
 
 export interface Snapshot {
@@ -74,23 +74,31 @@ export class SnapshotTx implements MutatorTx {
 }
 
 /**
- * Replays mutations in order. Each one runs in its own transaction, so a rejected mutation
- * leaves no partial writes behind (mirrors the server, which uses one savepoint per mutation).
- * `onRejected` also receives the state the mutation was refused on.
+ * Replays mutations in order: a device's rebase. Each one runs in its own transaction, so a
+ * refused mutation leaves no partial writes behind (mirrors the server, which uses one savepoint
+ * per mutation). `onRejected` also receives the error and the state the mutation was refused on.
+ *
+ * Whatever makes a mutation fail here means it does not apply on this device, not only a
+ * `MutationRejectedError`: one that breaks today's rules (`isReadable`) is not even run, and a
+ * mutator may throw anything on what another version of the app queued. A replay that threw would
+ * stop the device from starting at all; the server, which runs the mutation again, has the last
+ * word on it.
  */
 export async function applyMutations(
   base: Snapshot,
   mutations: readonly Mutation[],
-  onRejected?: (mutation: Mutation, error: MutationRejectedError, before: Snapshot) => void,
+  onRejected?: (mutation: Mutation, error: unknown, before: Snapshot) => void,
 ): Promise<Snapshot> {
   let snapshot = base;
   for (const mutation of mutations) {
     const tx = new SnapshotTx(snapshot);
     try {
+      if (!isReadable(mutation)) {
+        throw new MutationRejectedError(`Mutation ${mutation.id} breaks this version's rules`);
+      }
       await applyMutation(tx, mutation);
       snapshot = tx.commit();
     } catch (error) {
-      if (!(error instanceof MutationRejectedError)) throw error;
       onRejected?.(mutation, error, snapshot);
     }
   }

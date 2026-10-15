@@ -192,6 +192,29 @@ describe("describePendingMutations", () => {
   });
 });
 
+describe("a queued change this version cannot read", () => {
+  // Typing boundary: a known kind, with arguments another version of the app wrote.
+  const unreadable = {
+    id: 99,
+    timestamp: 1,
+    name: "renameSpace",
+    args: null,
+  } as unknown as Mutation;
+
+  it("is described as such, its fields never read", () => {
+    const otherVersion = "Modification faite avec une autre version de Relevé";
+    expect(describeMutation(unreadable, base)).toBe(otherVersion);
+    const deleteWc = mutation({ name: "deleteSpace", args: { id: WC } });
+    expect(describePendingMutations(base, [unreadable, deleteWc])).toEqual([
+      otherVersion,
+      french("Pièce « WC » supprimée"),
+    ]);
+    expect(describeRejection(unreadable, base, "invalid")).toBe(
+      "Une modification faite avec une autre version de Relevé n'a pas pu être appliquée.",
+    );
+  });
+});
+
 describe("describeMutationError", () => {
   it("shows the schema's French message for invalid input", () => {
     const { error } = mutationArgsSchemas.createProperty.safeParse({ id: PROPERTY, name: " " });

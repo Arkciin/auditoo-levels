@@ -6,7 +6,7 @@
  * name. The current view is not that state (it already includes the rename): to describe the
  * whole queue, use {@link describePendingMutations}, which walks it from the base.
  */
-import { type Mutation, MutationRejectedError, mutationNames, type Snapshot } from "@repo/shared";
+import { isReadable, type Mutation, MutationRejectedError, type Snapshot } from "@repo/shared";
 import { StorageClosedError } from "./storage";
 
 type EntityKind = "property" | "level" | "space";
@@ -75,6 +75,7 @@ export function describePendingMutations(
 
   const descriptions = pending.map((mutation) => {
     const description = describe(mutation, names);
+    if (!isReadable(mutation)) return description;
     switch (mutation.name) {
       case "createProperty":
       case "renameProperty":
@@ -113,7 +114,12 @@ export function describePendingMutations(
   return descriptions;
 }
 
+/** A queued mutation this version cannot read (see `isReadable`), however it was described. */
+const OTHER_VERSION = "Modification faite avec une autre version de Relevé";
+
 function describe(mutation: Mutation, names: NameLookup): string {
+  // Its fields cannot be trusted: another version of the app wrote it, under other rules.
+  if (!isReadable(mutation)) return OTHER_VERSION;
   switch (mutation.name) {
     case "createProperty":
       return `${subject("property", mutation.args.name)} créé`;
@@ -158,7 +164,7 @@ function describe(mutation: Mutation, names: NameLookup): string {
     case "restoreSpace":
       return `${subject("space", names.space(mutation.args.id)?.name)} restaurée`;
     default:
-      return unknownKind(mutation, "Modification faite avec une autre version de Relevé");
+      return unknownKind(mutation, OTHER_VERSION);
   }
 }
 
@@ -218,14 +224,12 @@ export function describeRejection(
   reason: string,
   against: Snapshot = before,
 ): string {
-  if (!KNOWN_MUTATIONS.has(mutation.name)) {
+  // A kind this version does not know, or arguments it cannot read: another version queued it.
+  if (!isReadable(mutation)) {
     return "Une modification faite avec une autre version de Relev\u00e9 n'a pas pu \u00eatre appliqu\u00e9e.";
   }
   return `${notDone(mutation, namesIn(before))}\u00a0: ${why(mutation, reason, against)}.`;
 }
-
-/** What this version knows: an outbox may also hold kinds another version queued. */
-const KNOWN_MUTATIONS: ReadonlySet<string> = new Set(mutationNames);
 
 const THE: Readonly<Record<EntityKind, string>> = {
   property: "Le logement",

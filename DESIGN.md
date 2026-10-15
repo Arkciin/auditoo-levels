@@ -223,8 +223,11 @@ pas pu être déplacée vers « R+1 » : le niveau n'existe plus. ».
 - **Other tabs** only see the mutation leave the outbox: the tab that reports a rejection tells
   them over the BroadcastChannel.
 - **At startup**, queued changes that no longer apply are listed but not announced: old news.
-- **Mutations of unknown kinds**, which a newer version of the app may have left in the outbox
-  (then rolled back, or in another tab), are refused like any other instead of failing the replay.
+- **Queued mutations this version cannot read**, which another version of the app may have left in
+  the outbox (an unknown kind from a newer one, then rolled back or in another tab; arguments
+  breaking rules that tightened since), are validated when the outbox is loaded and not run. They,
+  and any other failure of the local replay, mean "does not apply here": listed, kept for the
+  server to judge, never a reason for the app not to start.
 
 ### Replaced databases: reset and epoch
 

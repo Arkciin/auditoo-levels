@@ -183,7 +183,8 @@ export const mutators: { readonly [N in MutationName]: Mutator<N> } = {
     // a source deleted meanwhile stays deleted.
     const source = await requireLevel(tx, sourceId);
     await requireNewLevel(tx, id);
-    await requireNewSpaces(tx, spaces.map((space) => space.id));
+    const roomIds = spaces.map((space) => space.id);
+    await requireNewSpaces(tx, roomIds);
     await reviveProperty(tx, source.propertyId);
     await tx.putLevel({ id, propertyId: source.propertyId, name, position, deletedAt: null });
     for (const space of spaces) {
