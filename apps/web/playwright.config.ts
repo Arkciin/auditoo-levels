@@ -9,6 +9,10 @@ const baseURL = `http://localhost:${PORT}`;
 // Optional: a Chromium already on the machine instead of the one `playwright install` downloads.
 const chromiumPath = process.env.PLAYWRIGHT_CHROMIUM_PATH;
 
+// Optional: a throwaway PostgreSQL instead of the in-memory PGlite, as in production
+// (`scripts/with-postgres.sh`, or a service container in CI). Tests add data and never clean up.
+const databaseUrl = process.env.E2E_DATABASE_URL ?? "";
+
 export default defineConfig({
   testDir: "e2e",
   fullyParallel: true,
@@ -38,9 +42,9 @@ export default defineConfig({
     timeout: 60_000,
     env: {
       PORT: String(PORT),
-      // A fresh, empty database for every run, gone with the server: never a real one, even when
-      // the shell has a DATABASE_URL (blank means unset for the server).
-      DATABASE_URL: "",
+      // A fresh, empty database for every run, gone with the server, unless E2E_DATABASE_URL names
+      // a throwaway one: never the shell's DATABASE_URL (blank means unset for the server).
+      DATABASE_URL: databaseUrl,
       PGLITE_DATA_DIR: "memory://",
     },
   },

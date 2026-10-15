@@ -65,3 +65,54 @@ jobs:
           name: playwright-report
           path: apps/web/playwright-report/
           retention-days: 14
+
+  e2e-postgres:
+    # The same end-to-end suite against PostgreSQL itself, the major version Render runs, rather
+    # than PGlite: the SQL, the drivers and the isolation levels as in production.
+    name: End-to-end tests on PostgreSQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: releve
+          POSTGRES_PASSWORD: releve
+          POSTGRES_DB: releve
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U releve"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      - name: Install Playwright's Chromium
+        run: pnpm --filter @repo/web exec playwright install --with-deps chromium
+
+      - name: End-to-end tests
+        id: e2e
+        run: pnpm e2e
+        env:
+          E2E_DATABASE_URL: postgres://releve:releve@localhost:5432/releve
+
+      - name: Upload the Playwright report
+        if: failure() && steps.e2e.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report-postgres
+          path: apps/web/playwright-report/
+          retention-days: 14
