@@ -1,6 +1,12 @@
 import type { Level, Property, Space } from "@repo/shared";
 import { describe, expect, it } from "vitest";
-import { selectProperties, selectProperty, selectStructure } from "./selectors";
+import {
+  selectDeletedProperties,
+  selectDeletedStructure,
+  selectProperties,
+  selectProperty,
+  selectStructure,
+} from "./selectors";
 import { snapshotOf, uuid } from "./test-support/fixtures";
 
 function property(n: number, createdAt: number, deletedAt: number | null = null): Property {
@@ -133,5 +139,96 @@ describe("selectStructure", () => {
     expect(selectStructure(view, house.id)).toBe(selectStructure(view, house.id));
     expect(selectStructure(view, other.id)).not.toBe(selectStructure(view, house.id));
     expect(selectStructure(view, uuid(99))).toEqual([]);
+  });
+});
+
+describe("selectDeletedProperties", () => {
+  it("lists deleted properties only, last deleted first, ties broken by id", () => {
+    const view = snapshotOf({
+      properties: [
+        property(1, 1_000, 7_000),
+        property(2, 2_000),
+        property(3, 3_000, 9_000),
+        property(4, 4_000, 7_000),
+      ],
+    });
+
+    const ids = selectDeletedProperties(view).map((entry) => entry.property.id);
+
+    expect(ids).toEqual([uuid(3), uuid(4), uuid(1)]);
+    expect(selectDeletedProperties(view)[0]?.deletedAt).toBe(9_000);
+  });
+
+  it("counts what restoring brings back, as the list of logements counts it", () => {
+    const house = property(1, 1_000, 9_000);
+    const view = snapshotOf({
+      properties: [house],
+      levels: [level(11, house.id, "a0"), level(12, house.id, "a1", 8_000)],
+      spaces: [
+        space(21, uuid(11), "a0"),
+        space(22, uuid(11), "a1", 8_500),
+        space(23, uuid(12), "a0"), // Hidden with its deleted level.
+      ],
+    });
+
+    expect(selectDeletedProperties(view)).toEqual([
+      { property: house, deletedAt: 9_000, levelCount: 1, spaceCount: 1 },
+    ]);
+  });
+
+  it("returns the same instance for the same snapshot", () => {
+    const view = snapshotOf({ properties: [property(1, 1_000, 2_000)] });
+
+    expect(selectDeletedProperties(view)).toBe(selectDeletedProperties(view));
+    expect(selectDeletedProperties(snapshotOf({}))).toEqual([]);
+  });
+});
+
+describe("selectDeletedStructure", () => {
+  const house = property(1, 1_000);
+  const other = property(2, 1_000);
+  const view = snapshotOf({
+    properties: [house, other],
+    levels: [
+      level(11, house.id, "a0"),
+      level(12, house.id, "a1", 5_000),
+      level(13, house.id, "a2", 6_000),
+      level(14, other.id, "a0", 9_000), // In another property.
+    ],
+    spaces: [
+      space(21, uuid(11), "a0", 3_000),
+      space(22, uuid(11), "a1", 7_000),
+      space(23, uuid(11), "a2"),
+      space(24, uuid(12), "a0"),
+      space(25, uuid(12), "a1"),
+      space(26, uuid(12), "a2", 4_000), // Deleted before its level: not back with it.
+      space(27, uuid(14), "a0", 9_500), // In another property.
+    ],
+  });
+
+  it("lists deleted levels, last deleted first, with the spaces restoring them brings back", () => {
+    const { levels } = selectDeletedStructure(view, house.id);
+
+    expect(levels).toEqual([
+      { level: level(13, house.id, "a2", 6_000), deletedAt: 6_000, spaceCount: 0 },
+      { level: level(12, house.id, "a1", 5_000), deletedAt: 5_000, spaceCount: 2 },
+    ]);
+  });
+
+  it("lists the deleted spaces of non-deleted levels only, last deleted first", () => {
+    const { spaces } = selectDeletedStructure(view, house.id);
+
+    expect(spaces.map((entry) => [entry.space.id, entry.deletedAt, entry.level.id])).toEqual([
+      [uuid(22), 7_000, uuid(11)],
+      [uuid(21), 3_000, uuid(11)],
+    ]);
+  });
+
+  it("returns the same instance for the same snapshot and property", () => {
+    expect(selectDeletedStructure(view, house.id)).toBe(selectDeletedStructure(view, house.id));
+    expect(selectDeletedStructure(view, other.id).levels.map(({ level }) => level.id)).toEqual([
+      uuid(14),
+    ]);
+    expect(selectDeletedStructure(view, uuid(99))).toEqual({ levels: [], spaces: [] });
   });
 });
