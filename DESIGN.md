@@ -280,6 +280,7 @@ protocol errors are.
 | Duplicate a level another device deleted or changed meanwhile | The copy is what the user saw; the source stays as the other device left it | The rooms travel in the mutation; a copy reads its source, it does not edit it |
 | Delete an already deleted item | No-op, no version bump | Idempotent |
 | Move a room to another logement | Rejected | A room belongs to one dwelling; drag and drop never offers it |
+| A create reusing an id that exists, deleted or not (a copy's rooms included) | Rejected, on device and server alike | It would overwrite the entity: a `createSpace` could move a room to another logement. In normal operation a create is judged once, against a state that cannot hold its id (`mutators.ts`): only a faulty client reuses one |
 | Mutation on an entity the server does not know | Rejected, acknowledged, reported to the user (toast, sync sheet), dropped at the next pull | Only after a database wipe, or from a buggy client |
 
 ## Ordering with fractional indexes
@@ -461,9 +462,10 @@ budget and end-to-end tests on every push.
   nothing is lost. No conflict UI beyond the message: re-doing the change is up to the user.
 - **Pushes are capped in count, not in bytes**: the body limit holds for today's largest mutation
   (tested). Next: the device also caps each push in bytes, so that no future mutation can outgrow it.
-- **A level copy takes one SQL statement per room**, all while holding the version lock: a push of
-  a 100-room copy takes about 60 ms on PGlite (measured over HTTP), more with network round trips
-  to PostgreSQL. Next, if levels grow: a batched `putSpaces` on `ServerTx`.
+- **A level copy takes one SQL statement per room**, all while holding the version lock (checking
+  that none of their ids exists takes one read for them all): a push of a 100-room copy takes 60 to
+  90 ms on PGlite (measured over HTTP), more with network round trips to PostgreSQL. Next, if
+  levels grow: a batched `putSpaces` on `ServerTx`.
 - **Long levels are dragged whole**: an earlier version collapsed every level during a level drag,
   but the layout shift moved dnd-kit's measured rect and the floating copy drifted away from the
   finger (caught by an e2e test). Collapsing again needs a modifier that re-anchors the overlay.

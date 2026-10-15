@@ -318,15 +318,18 @@ function missingEntity(mutation: Mutation, state: Snapshot): string | undefined 
     return found ? property(found.propertyId) : "le niveau n'existe plus";
   };
   switch (mutation.name) {
-    case "createProperty":
     case "deleteProperty":
     case "deleteLevel":
     case "deleteSpace":
       return undefined; // Their mutators never refuse.
+    // A create never writes over an entity: only a faulty client reuses an id.
+    case "createProperty":
+      return state.properties.has(mutation.args.id) ? "il existe déjà" : undefined;
     case "renameProperty":
     case "restoreProperty":
       return state.properties.has(mutation.args.id) ? undefined : "il n'existe plus";
     case "createLevel":
+      if (state.levels.has(mutation.args.id)) return "il existe déjà";
       return property(mutation.args.propertyId);
     case "renameLevel":
     case "moveLevel":
@@ -336,9 +339,15 @@ function missingEntity(mutation: Mutation, state: Snapshot): string | undefined 
     }
     case "duplicateLevel": {
       const source = state.levels.get(mutation.args.sourceId);
-      return source ? property(source.propertyId) : "il n'existe plus";
+      if (!source) return "il n'existe plus";
+      const { id, spaces } = mutation.args;
+      if (state.levels.has(id) || spaces.some((space) => state.spaces.has(space.id))) {
+        return "sa copie existe déjà";
+      }
+      return property(source.propertyId);
     }
     case "createSpace":
+      if (state.spaces.has(mutation.args.id)) return "elle existe déjà";
       return level(mutation.args.levelId);
     case "renameSpace":
     case "restoreSpace": {

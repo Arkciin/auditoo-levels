@@ -39,6 +39,11 @@ export class SnapshotTx implements MutatorTx {
     return Promise.resolve((this.spaces ?? this.base.spaces).get(id));
   }
 
+  getSpaces(ids: readonly string[]) {
+    const spaces = this.spaces ?? this.base.spaces;
+    return Promise.resolve(ids.flatMap((id) => spaces.get(id) ?? []));
+  }
+
   putProperty(property: Property) {
     this.properties ??= new Map(this.base.properties);
     this.properties.set(property.id, property);

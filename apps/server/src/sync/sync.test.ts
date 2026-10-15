@@ -276,6 +276,59 @@ describe("push and pull", () => {
     expect(changes.properties.map((property) => property.name)).toEqual(["Appartement"]);
   });
 
+  it("refuses a create whose id exists, deleted or not: it would overwrite the entity", async () => {
+    const OTHER_PROPERTY = "0199f0a0-0000-7000-8000-000000000002";
+    const OTHER_LEVEL = "0199f0a0-0000-7000-8000-000000000012";
+    const COPY = "0199f0a0-0000-7000-8000-000000000013";
+    await push({
+      clientId: DEVICE_A,
+      mutations: [
+        ...seed,
+        mutation(4, { name: "createProperty", args: { id: OTHER_PROPERTY, name: "Villa" } }),
+        mutation(5, {
+          name: "createLevel",
+          args: { id: OTHER_LEVEL, propertyId: OTHER_PROPERTY, name: "RDC", position: "a0" },
+        }),
+        mutation(6, { name: "deleteProperty", args: { id: OTHER_PROPERTY } }, 2_000),
+      ],
+    });
+    const before = await pull(DEVICE_A, 0);
+
+    // Another device (faulty or hostile) reuses ids: the kitchen's, to drop it into the other
+    // logement, which moveSpace refuses; deleted entities' too.
+    const kitchen = { id: KITCHEN, levelId: OTHER_LEVEL, name: "Cuisine", position: "a0" };
+    const result = await push({
+      clientId: DEVICE_B,
+      mutations: [
+        mutation(1, { name: "createSpace", args: kitchen }),
+        mutation(2, { name: "createProperty", args: { id: OTHER_PROPERTY, name: "Manoir" } }),
+        mutation(3, {
+          name: "createLevel",
+          args: { id: RDC, propertyId: OTHER_PROPERTY, name: "R+1", position: "a1" },
+        }),
+        mutation(4, {
+          name: "duplicateLevel",
+          args: {
+            id: COPY,
+            sourceId: OTHER_LEVEL,
+            name: "R+1",
+            position: "a1",
+            spaces: [{ id: KITCHEN, name: "Cuisine", position: "a0" }],
+          },
+        }),
+      ],
+    });
+
+    expect(result).toEqual({
+      lastMutationId: 4,
+      version: before.cursor,
+      changed: false,
+      rejected: [1, 2, 3, 4].map((id) => ({ id, reason: "not_applicable" })),
+    });
+    // Nothing moved, nothing revived, no copy.
+    expect(await pull(DEVICE_A, 0)).toEqual(before);
+  });
+
   it("accepts gaps in mutation ids: they only have to increase", async () => {
     // Devices allocate ids with an IndexedDB key generator, which can skip values.
     const sparse = [

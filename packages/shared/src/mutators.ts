@@ -30,6 +30,8 @@ export interface MutatorTx {
   getProperty(id: string): Promise<Property | undefined>;
   getLevel(id: string): Promise<Level | undefined>;
   getSpace(id: string): Promise<Space | undefined>;
+  /** The spaces among `ids` that exist, deleted or not, in any order: one read for many. */
+  getSpaces(ids: readonly string[]): Promise<Space[]>;
   putProperty(property: Property): Promise<void>;
   putLevel(level: Level): Promise<void>;
   putSpace(space: Space): Promise<void>;
@@ -124,6 +126,7 @@ type Mutator<N extends MutationName> = (
 
 export const mutators: { readonly [N in MutationName]: Mutator<N> } = {
   async createProperty(tx, { id, name }, { timestamp }) {
+    await requireNewProperty(tx, id);
     await tx.putProperty({ id, name, createdAt: timestamp, deletedAt: null });
   },
 
@@ -143,6 +146,7 @@ export const mutators: { readonly [N in MutationName]: Mutator<N> } = {
   },
 
   async createLevel(tx, { id, propertyId, name, position }) {
+    await requireNewLevel(tx, id);
     await reviveProperty(tx, propertyId);
     await tx.putLevel({ id, propertyId, name, position, deletedAt: null });
   },
@@ -178,6 +182,8 @@ export const mutators: { readonly [N in MutationName]: Mutator<N> } = {
     // the copy) takes everything back. The source is only read: copying it is not editing it, so
     // a source deleted meanwhile stays deleted.
     const source = await requireLevel(tx, sourceId);
+    await requireNewLevel(tx, id);
+    await requireNewSpaces(tx, spaces.map((space) => space.id));
     await reviveProperty(tx, source.propertyId);
     await tx.putLevel({ id, propertyId: source.propertyId, name, position, deletedAt: null });
     for (const space of spaces) {
@@ -192,6 +198,7 @@ export const mutators: { readonly [N in MutationName]: Mutator<N> } = {
   },
 
   async createSpace(tx, { id, levelId, name, position }) {
+    await requireNewSpace(tx, id);
     await reviveLevel(tx, levelId);
     await tx.putSpace({ id, levelId, name, position, deletedAt: null });
   },
@@ -244,6 +251,38 @@ async function requireSpace(tx: MutatorTx, id: string): Promise<Space> {
   const space = await tx.getSpace(id);
   if (!space) throw new MutationRejectedError(`Unknown space ${id}`);
   return space;
+}
+
+// A create never writes over an entity that exists, deleted or not. A put replaces the whole row:
+// a `createSpace` reusing a room's id would move that room to another level, even to another
+// logement (which `moveSpace` refuses), and a create could bring a deleted entity back with other
+// contents.
+//
+// In normal operation a create is judged once, against a state that cannot hold its id yet: the
+// device that creates draws the id (UUIDv7); the server skips the mutations it has processed, so a
+// retried push never runs a create again; a device drops the mutations a pull reports processed in
+// the step that brings their rows (one server snapshot, one IndexedDB transaction, which other
+// tabs reload whole), so it never replays a create over its own result; and a replaced database
+// (another epoch) holds neither the rows nor the record of the mutations. Only a faulty or hostile
+// client reuses an id.
+
+async function requireNewProperty(tx: MutatorTx, id: string): Promise<void> {
+  if (await tx.getProperty(id)) throw new MutationRejectedError(`Property ${id} already exists`);
+}
+
+async function requireNewLevel(tx: MutatorTx, id: string): Promise<void> {
+  if (await tx.getLevel(id)) throw new MutationRejectedError(`Level ${id} already exists`);
+}
+
+async function requireNewSpace(tx: MutatorTx, id: string): Promise<void> {
+  if (await tx.getSpace(id)) throw new MutationRejectedError(`Space ${id} already exists`);
+}
+
+/** One read for the rooms of a level copy: the server holds the version lock meanwhile. */
+async function requireNewSpaces(tx: MutatorTx, ids: readonly string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const [taken] = await tx.getSpaces(ids);
+  if (taken) throw new MutationRejectedError(`Space ${taken.id} already exists`);
 }
 
 /** Ensures the property exists and is not deleted ("edit wins over delete"). */

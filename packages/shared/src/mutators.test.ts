@@ -121,6 +121,61 @@ describe("mutators", () => {
       );
     });
 
+    describe("a create over an entity that exists, deleted or not", () => {
+      const refused = async (base: Snapshot, mutation: Mutation) => {
+        const onRejected = vi.fn();
+        const after = await applyMutations(base, [mutation], onRejected);
+        expect(onRejected).toHaveBeenCalledWith(mutation, expect.any(MutationRejectedError), base);
+        expect(after).toBe(base); // Nothing written.
+      };
+
+      it("cannot move a room to another logement, which moveSpace refuses", async () => {
+        const base = await build(
+          m({ name: "createProperty", args: { id: OTHER_PROPERTY, name: "Autre logement" } }),
+          m({
+            name: "createLevel",
+            args: { id: OTHER_LEVEL, propertyId: OTHER_PROPERTY, name: "RDC", position: "a0" },
+          }),
+        );
+        const reuse = { id: KITCHEN, levelId: OTHER_LEVEL, name: "Cuisine", position: "a0" };
+        await refused(base, m({ name: "createSpace", args: reuse }));
+        await refused(base, m({ name: "createSpace", args: { ...reuse, levelId: R1 } }));
+      });
+
+      it("is refused for every kind of create", async () => {
+        const base = await build(
+          m({ name: "deleteProperty", args: { id: PROPERTY } }, 2_000),
+          m({ name: "deleteLevel", args: { id: R1 } }, 2_000),
+          m({ name: "deleteSpace", args: { id: KITCHEN } }, 2_000),
+        );
+        await refused(base, m({ name: "createProperty", args: { id: PROPERTY, name: "Villa" } }));
+        const level = { id: R1, propertyId: PROPERTY, name: "R+2", position: "a2" };
+        await refused(base, m({ name: "createLevel", args: level }));
+        const space = { id: KITCHEN, levelId: RDC, name: "Salon", position: "a1" };
+        await refused(base, m({ name: "createSpace", args: space }));
+      });
+
+      it("is refused for a level copy reusing any id, its rooms' included", async () => {
+        const copy = "0199f0a0-0000-7000-8000-000000000015";
+        const fresh = "0199f0a0-0000-7000-8000-000000000033";
+        const duplicate = (id: string, spaceId: string) =>
+          m({
+            name: "duplicateLevel",
+            args: {
+              id,
+              sourceId: RDC,
+              name: "RDC (copie)",
+              position: "a0V",
+              spaces: [{ id: spaceId, name: "Cuisine", position: "a0" }],
+            },
+          });
+        const base = await build();
+        await refused(base, duplicate(R1, fresh));
+        await refused(base, duplicate(copy, KITCHEN));
+        expect((await applyMutations(base, [duplicate(copy, fresh)])).levels.has(copy)).toBe(true);
+      });
+    });
+
     it("refuses to move a space to another property", async () => {
       const onRejected = vi.fn();
       const snapshot = await applyMutations(
@@ -202,9 +257,11 @@ describe("mutators", () => {
       );
     });
 
-    it("is idempotent: applying it again changes nothing", async () => {
+    it("is refused when applied again: the copy exists", async () => {
       const once = await build(duplicate());
-      expect(await applyMutations(once, [duplicate()])).toEqual(once);
+      const onRejected = vi.fn();
+      expect(await applyMutations(once, [duplicate()], onRejected)).toBe(once);
+      expect(onRejected).toHaveBeenCalledOnce();
     });
 
     describe("arguments", () => {

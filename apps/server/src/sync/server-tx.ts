@@ -34,6 +34,11 @@ export class ServerTx implements MutatorTx {
     return space;
   }
 
+  async getSpaces(ids: readonly string[]): Promise<Space[]> {
+    if (ids.length === 0) return [];
+    return this.sql.query<Space>(`${SELECT_SPACES} WHERE id = ANY($1::uuid[])`, [ids]);
+  }
+
   // A put replaces the whole entity, exactly like the device-side snapshot transaction does.
 
   async putProperty({ id, name, createdAt, deletedAt }: Property): Promise<void> {

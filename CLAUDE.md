@@ -63,7 +63,8 @@ pnpm vitest run apps/web/src/sync/convergence.test.ts
    parents (`reviveLevel`, `reviveProperty`). Deletes are soft and idempotent, and each `delete*`
    has a `restore*`.
 5. **Puts replace the whole entity.** Spread the current row (`{ ...space, name }`);
-   `ServerTx.put*` writes every column.
+   `ServerTx.put*` writes every column. So a create first refuses an id that exists, deleted or
+   not (`requireNewSpace`…): written over, a room could change logement.
 6. **Positions** come only from `positionAtIndex(siblings, index)`, `positionAtEnd(siblings)` or
    `positionBetween`, with `siblings` sorted by `compareByPosition` and without the moved item.
    Compare with `comparePositions` or `compareByPosition`, never `localeCompare`. A new position
