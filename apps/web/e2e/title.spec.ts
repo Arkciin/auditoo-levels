@@ -34,4 +34,19 @@ test("a logement's name shows in full, then in the header once scrolled under it
     await expect(headerCopy).toHaveCSS("opacity", "1");
     await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
   });
+
+  await test.step("renamed from the menu, the field comes into view with the focus", async () => {
+    const newName = uniqueName("Maison");
+    await page.getByRole("button", { name: "Actions du logement", exact: true }).tap();
+    await page.getByRole("menuitem", { name: "Renommer le logement", exact: true }).tap();
+    await expect(field).toBeFocused();
+    await expect(field).toBeInViewport();
+    await field.fill(newName);
+    await field.press("Enter");
+    await expect(propertyTitle(page, newName)).toBeVisible();
+    await expect(page.getByRole("banner").getByText(newName, { exact: true })).toHaveCSS(
+      "opacity",
+      "0",
+    );
+  });
 });

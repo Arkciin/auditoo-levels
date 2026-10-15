@@ -46,6 +46,7 @@ export function StructureScreen({ propertyId }: { propertyId: string }) {
    */
   const [leaving, setLeaving] = useState<Property | null>(null);
   const [deletedSheet, setDeletedSheet] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   /** What takes over once the menu has closed: the rename field, or the deleted items' sheet. */
   const afterMenu = useRef<"rename" | "deleted" | null>(null);
   const clearAutoAdd = useCallback(() => setAutoAddLevelId(null), []);
@@ -95,7 +96,7 @@ export function StructureScreen({ propertyId }: { propertyId: string }) {
         leading={<BackToList />}
         title={<CompactTitle shown={titleUnderHeader}>{property.name}</CompactTitle>}
         actions={
-          <DropdownMenu>
+          <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" aria-label="Actions du logement">
                 <EllipsisVertical />
@@ -114,8 +115,13 @@ export function StructureScreen({ propertyId }: { propertyId: string }) {
               }}
             >
               <DropdownMenuItem
-                onSelect={() => {
+                onSelect={(event) => {
+                  // The menu closes in the same render as the field opens, so that it has let go
+                  // of the focus when the field takes it: Radix would close it after this
+                  // handler, and its focus trap would pull the focus back from the field.
+                  event.preventDefault();
                   afterMenu.current = "rename";
+                  setMenuOpen(false);
                   setRenaming(true);
                 }}
               >
