@@ -1,5 +1,6 @@
 import { NAME_MAX_LENGTH } from "@repo/shared";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { cn } from "@/lib/utils";
 
@@ -33,6 +34,7 @@ export function EditableText({
   const buttonRef = useRef<HTMLButtonElement>(null);
   const committing = useRef(false);
   const wasEditing = useRef(editing);
+  const hintId = useId();
 
   function setEditing(next: boolean) {
     setLocalEditing(next);
@@ -100,16 +102,30 @@ export function EditableText({
     );
   }
 
+  // Named by the text alone: a heading around it (a level, the logement) takes its name from it,
+  // and must read « RDC », not « RDC, renommer ». What a tap does is its description, kept out
+  // of the page, where it would add to the text of the heading or the row.
   return (
-    <button
-      ref={buttonRef}
-      type="button"
-      data-slot="editable-text"
-      className={cn("min-w-0 truncate text-left", className)}
-      aria-label={`${value}, renommer`}
-      onClick={() => setEditing(true)}
-    >
-      {value}
-    </button>
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        data-slot="editable-text"
+        className={cn("min-w-0 truncate text-left", className)}
+        aria-describedby={hintId}
+        onClick={() => setEditing(true)}
+      >
+        {value}
+      </button>
+      {createPortal(
+        <span id={hintId} hidden>
+          {RENAME_HINT}
+        </span>,
+        document.body,
+      )}
+    </>
   );
 }
+
+/** The accessible description of a name that turns into a field. */
+const RENAME_HINT = "Renommer";

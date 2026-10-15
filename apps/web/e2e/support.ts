@@ -159,11 +159,12 @@ export function propertyRow(page: Page, name: string): Locator {
     .filter({ has: page.getByText(name, { exact: true }) });
 }
 
-/** The logement's name in the header of its screen: a button that turns into a field. */
+/**
+ * The logement's name in the header of its screen: a button that turns into a field. Like the
+ * names of levels and rooms, it is named by its text, and described « Renommer ».
+ */
 export function propertyTitle(page: Page, name: string): Locator {
-  return page
-    .getByRole("heading", { level: 1 })
-    .getByRole("button", { name: `${name}, renommer`, exact: true });
+  return page.getByRole("heading", { level: 1 }).getByRole("button", { name, exact: true });
 }
 
 export function backToList(page: Page): Promise<void> {
@@ -250,12 +251,18 @@ export function rooms(page: Page, levelName: string): Locator {
 }
 
 export function room(page: Page, levelName: string, name: string): Locator {
-  return rooms(page, levelName).filter({ has: roomName(page, name) });
+  // The name, not the menu (« Actions de la pièce … ») nor the handle (« Déplacer … »).
+  return rooms(page, levelName).filter({ has: page.getByRole("button", { name, exact: true }) });
 }
 
-/** A room's name: a button that turns into a field. */
+/**
+ * A room's name: a button that turns into a field, in a level's list of rooms (a suggestion chip
+ * can bear the same name).
+ */
 export function roomName(page: Page, name: string): Locator {
-  return page.getByRole("button", { name: `${name}, renommer`, exact: true });
+  return page
+    .getByRole("list", { name: /^Pièces du niveau / })
+    .getByRole("button", { name, exact: true });
 }
 
 export async function expectRooms(
@@ -476,25 +483,25 @@ const MAX_DRAG_PX = 800;
 
 /**
  * Drags an item by its handle, a few pixels at a time with a couple of frames in between, until
- * dnd-kit announces that `item` is over `target`, then drops it there: the item takes the
- * target's place. With the mouse (dnd-kit starts after 4 px), or with a finger, which first holds
- * the handle still until the drag starts.
+ * dnd-kit announces that dropped now, `item` would land at `position` ("position 2 sur 4 dans
+ * « RDC »", "position 1 sur 3 parmi les niveaux"), then drops it there. With the mouse (dnd-kit
+ * starts after 4 px), or with a finger, which first holds the handle still until the drag starts.
  *
  * Steering by the announcement, the feedback the app gives screen reader users, rather than by
  * coordinates computed beforehand keeps this independent of the layout, which changes during a
  * drag: levels shrink to their headers, a room entering another level pushes its new neighbours.
  */
-export async function dragOnto(
+export async function dragTo(
   handle: Locator,
   {
     item,
-    target,
+    position,
     direction,
     input = "mouse",
-  }: { item: string; target: string; direction: "up" | "down"; input?: "mouse" | "touch" },
+  }: { item: string; position: string; direction: "up" | "down"; input?: "mouse" | "touch" },
 ): Promise<void> {
   const page = handle.page();
-  const over = `« ${item} » près de « ${target} ».`;
+  const over = `« ${item} », ${position}.`;
   const start = await centre(handle);
   const drag = async (pointer: Finger) => {
     const { x } = start;
@@ -541,5 +548,5 @@ export async function dragOnto(
       up: () => page.mouse.up(),
     });
   }
-  await expect.poll(() => dragAnnouncement(page)).toBe(`« ${item} » déposé près de « ${target} ».`);
+  await expect.poll(() => dragAnnouncement(page)).toBe(`« ${item} » déposé, ${position}.`);
 }

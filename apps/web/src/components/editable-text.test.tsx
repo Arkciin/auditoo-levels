@@ -38,7 +38,7 @@ function setup(onSave: Save = vi.fn()) {
   return { user, onSave };
 }
 
-const nameButton = (name: string) => screen.getByRole("button", { name: `${name}, renommer` });
+const nameButton = (name: string) => screen.getByRole("button", { name });
 const field = () => screen.getByRole("textbox", { name: "Nom de la pièce" });
 const queryField = () => screen.queryByRole("textbox", { name: "Nom de la pièce" });
 
@@ -50,6 +50,17 @@ async function rename(user: ReturnType<typeof userEvent.setup>, text: string) {
 }
 
 describe("EditableText", () => {
+  it("is named by its text alone, as is a heading around it; renaming is its description", () => {
+    render(
+      <h2>
+        <RoomName onSave={vi.fn()} />
+      </h2>,
+    );
+
+    expect(screen.getByRole("heading", { name: "Cuisine" })).toHaveTextContent(/^Cuisine$/);
+    expect(nameButton("Cuisine")).toHaveAccessibleDescription("Renommer");
+  });
+
   it("turns into a focused field, its text selected, when the name is tapped", async () => {
     const { user } = setup();
 
@@ -67,7 +78,7 @@ describe("EditableText", () => {
     await rename(user, "  Salon  {Enter}");
 
     expect(onSave).toHaveBeenCalledExactlyOnceWith("Salon");
-    expect(await screen.findByRole("button", { name: "Salon, renommer" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "Salon" })).toBeVisible();
     expect(queryField()).not.toBeInTheDocument();
   });
 
@@ -78,7 +89,7 @@ describe("EditableText", () => {
     await user.tab();
 
     expect(onSave).toHaveBeenCalledExactlyOnceWith("Salon");
-    expect(await screen.findByRole("button", { name: "Salon, renommer" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "Salon" })).toBeVisible();
   });
 
   it("cancels on Escape", async () => {
@@ -123,7 +134,7 @@ describe("EditableText", () => {
 
     await user.type(field(), " bleu{Enter}");
     expect(onSave).toHaveBeenLastCalledWith("Salon bleu");
-    expect(await screen.findByRole("button", { name: "Salon bleu, renommer" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "Salon bleu" })).toBeVisible();
   });
 
   it("takes the focus back when a save on leaving the field is rejected", async () => {
@@ -147,7 +158,7 @@ describe("EditableText", () => {
     await user.tab();
     saving.resolve();
 
-    expect(await screen.findByRole("button", { name: "Salon, renommer" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "Salon" })).toBeVisible();
     expect(onSave).toHaveBeenCalledTimes(1);
   });
 
@@ -155,7 +166,7 @@ describe("EditableText", () => {
     const { user } = setup();
 
     await rename(user, "Salon{Enter}");
-    expect(await screen.findByRole("button", { name: "Salon, renommer" })).toHaveFocus();
+    expect(await screen.findByRole("button", { name: "Salon" })).toHaveFocus();
 
     await user.keyboard("{Enter}"); // the name, focused, opens the field again
     expect(field()).toHaveFocus();
@@ -169,7 +180,7 @@ describe("EditableText", () => {
     await rename(user, "Salon");
     await user.click(document.body); // a tap beside the controls
 
-    expect(await screen.findByRole("button", { name: "Salon, renommer" })).toHaveFocus();
+    expect(await screen.findByRole("button", { name: "Salon" })).toHaveFocus();
   });
 
   it("leaves the focus on the control the field was left for", async () => {
@@ -184,7 +195,7 @@ describe("EditableText", () => {
     await rename(user, "Salon");
     await user.tab();
 
-    expect(await screen.findByRole("button", { name: "Salon, renommer" })).not.toHaveFocus();
+    expect(await screen.findByRole("button", { name: "Salon" })).not.toHaveFocus();
     expect(screen.getByRole("button", { name: "Suivant" })).toHaveFocus();
   });
 
@@ -212,6 +223,6 @@ describe("EditableText", () => {
 
     expect(onSave).toHaveBeenCalledExactlyOnceWith("Salon");
     expect(onEditingChange).toHaveBeenLastCalledWith(false);
-    expect(await screen.findByRole("button", { name: "Salon, renommer" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "Salon" })).toBeVisible();
   });
 });

@@ -87,11 +87,43 @@ interface DragData {
   name: string;
 }
 
+/** What screen readers call a drag handle, rather than dnd-kit's English "sortable". */
+const ROLE_DESCRIPTION = "poignée de déplacement";
+
 const dragData = (entry: Active | Over | null) => entry?.data.current as DragData | undefined;
 
 function findContainer(containers: Containers, id: string): string | undefined {
   if (id in containers) return id;
   return Object.keys(containers).find((levelId) => containers[levelId]?.includes(id));
+}
+
+/** Where a dragged item would land if dropped now: its index among `count` items. */
+interface Landing {
+  /** The level a room lands in; null for a level, which lands among the levels. */
+  levelId: string | null;
+  index: number;
+  count: number;
+}
+
+/**
+ * Where the room `activeId` would land if dropped on `overId` now, given the room order of the
+ * drag: over another room of its level, it takes that room's place; over itself or its level
+ * (or nothing), it stays where it is. What the drop does, and what is announced.
+ */
+function roomLanding(containers: Containers, activeId: string, overId: string | null): Landing {
+  const levelId = findContainer(containers, activeId) ?? null;
+  let ids = levelId === null ? [] : (containers[levelId] ?? []);
+  const from = ids.indexOf(activeId);
+  const to = overId === null ? -1 : ids.indexOf(overId);
+  if (from >= 0 && to >= 0 && from !== to) ids = arrayMove([...ids], from, to);
+  return { levelId, index: ids.indexOf(activeId), count: ids.length };
+}
+
+/** Where the level `activeId` would land if dropped on `overId` now: in the place of `overId`. */
+function levelLanding(levelIds: readonly string[], activeId: string, overId: string | null) {
+  const from = levelIds.indexOf(activeId);
+  const to = overId === null ? -1 : levelIds.indexOf(overId);
+  return { levelId: null, index: to >= 0 ? to : from, count: levelIds.length } satisfies Landing;
 }
 
 export function StructureBoard({
@@ -110,6 +142,9 @@ export function StructureBoard({
   const moveSpace = useMoveSpace(propertyId);
   const [active, setActive] = useState<{ id: string; type: DragData["type"] } | null>(null);
   const [dragContainers, setDragContainers] = useState<Containers | null>(null);
+  // Also kept in a ref, set by the drag handlers: dnd-kit calls the announcements right after
+  // them, before React renders, and they must tell where the room is now.
+  const latestDragContainers = useRef<Containers | null>(null);
   const lastOverId = useRef<UniqueIdentifier | null>(null);
   const movedToNewContainer = useRef(false);
   // One « Déplacer vers… » sheet for every room; the room stays set while the sheet closes.
@@ -183,11 +218,16 @@ export function StructureBoard({
     [active, containers],
   );
 
+  function updateDragContainers(next: Containers | null) {
+    latestDragContainers.current = next;
+    setDragContainers(next);
+  }
+
   function handleDragStart({ active: dragged }: DragStartEvent) {
     const data = dragData(dragged);
     if (!data) return;
     setActive({ id: String(dragged.id), type: data.type });
-    if (data.type === "space") setDragContainers(committed);
+    if (data.type === "space") updateDragContainers(committed);
     // With the lifted copy (DragPreview), what tells a finger that the hold is over.
     haptic(10);
   }
@@ -196,63 +236,91 @@ export function StructureBoard({
     if (!over || dragData(dragged)?.type !== "space") return;
     const activeId = String(dragged.id);
     const overId = String(over.id);
-    setDragContainers((previous) => {
-      const current = previous ?? committed;
-      const from = findContainer(current, activeId);
-      const to = findContainer(current, overId);
-      if (!from || !to || from === to) return previous;
-      const target = current[to] ?? [];
-      let index = target.length; // dropped on the level itself: at the end
-      if (!(overId in current)) {
-        const overIndex = target.indexOf(overId);
-        const translated = dragged.rect.current.translated;
-        const below = translated !== null && translated.top > over.rect.top + over.rect.height / 2;
-        index = overIndex >= 0 ? overIndex + (below ? 1 : 0) : target.length;
-      }
-      movedToNewContainer.current = true;
-      return {
-        ...current,
-        [from]: (current[from] ?? []).filter((id) => id !== activeId),
-        [to]: [...target.slice(0, index), activeId, ...target.slice(index)],
-      };
+    const current = latestDragContainers.current ?? committed;
+    const from = findContainer(current, activeId);
+    const to = findContainer(current, overId);
+    if (!from || !to || from === to) return;
+    const target = current[to] ?? [];
+    let index = target.length; // dropped on the level itself: at the end
+    if (!(overId in current)) {
+      const overIndex = target.indexOf(overId);
+      const translated = dragged.rect.current.translated;
+      const below = translated !== null && translated.top > over.rect.top + over.rect.height / 2;
+      index = overIndex >= 0 ? overIndex + (below ? 1 : 0) : target.length;
+    }
+    movedToNewContainer.current = true;
+    updateDragContainers({
+      ...current,
+      [from]: (current[from] ?? []).filter((id) => id !== activeId),
+      [to]: [...target.slice(0, index), activeId, ...target.slice(index)],
     });
   }
 
   async function handleDragEnd({ active: dragged, over }: DragEndEvent) {
     const activeId = String(dragged.id);
+    const overId = over ? String(over.id) : null;
     const type = dragData(dragged)?.type;
     setActive(null);
 
     if (type === "level") {
       const level = levels.find((candidate) => candidate.id === activeId);
-      const from = levelIds.indexOf(activeId);
-      const to = over ? levelIds.indexOf(String(over.id)) : -1;
-      if (level && from >= 0 && to >= 0 && from !== to) await moveLevel(level, to);
+      const { index } = levelLanding(levelIds, activeId, overId);
+      if (level && overId !== null && index !== levelIds.indexOf(activeId)) {
+        await moveLevel(level, index);
+      }
       return;
     }
 
-    const current = dragContainers ?? committed;
-    const container = findContainer(current, activeId);
+    const { levelId, index } = roomLanding(
+      latestDragContainers.current ?? committed,
+      activeId,
+      overId,
+    );
     const space = spacesById.get(activeId);
-    const target = levels.find((level) => level.id === container);
-    if (over && container && space && target) {
-      let ids = current[container] ?? [];
-      const from = ids.indexOf(activeId);
-      const to = ids.indexOf(String(over.id));
-      if (to >= 0 && from !== to) ids = arrayMove([...ids], from, to);
-      const index = ids.indexOf(activeId);
+    const target = levels.find((level) => level.id === levelId);
+    if (overId !== null && space && target) {
       const moved =
-        space.levelId !== container || committed[container]?.indexOf(activeId) !== index;
+        space.levelId !== target.id || committed[target.id]?.indexOf(activeId) !== index;
       if (moved) await moveSpace(space, target, index);
     }
     // Cleared after the mutation so the room does not jump back for a frame.
-    setDragContainers(null);
+    updateDragContainers(null);
   }
 
   function handleDragCancel() {
     setActive(null);
-    setDragContainers(null);
+    updateDragContainers(null);
   }
+
+  // In French, and where the item would land (« position 2 sur 4 dans « R+1 » »): dnd-kit's
+  // default names the item under the pointer, which, right after a room changes level, is the
+  // room itself (« « Bureau » près de « Bureau » »).
+  const announcements = useMemo<Announcements>(() => {
+    const where = (dragged: Active, over: Over | null): string => {
+      const activeId = String(dragged.id);
+      const overId = over ? String(over.id) : null;
+      if (dragData(dragged)?.type === "level") {
+        const { index, count } = levelLanding(levelIds, activeId, overId);
+        return `position ${index + 1} sur ${count} parmi les niveaux`;
+      }
+      const containers = latestDragContainers.current ?? committed;
+      const { levelId, index, count } = roomLanding(containers, activeId, overId);
+      const level = levels.find((candidate) => candidate.id === levelId);
+      return `position ${index + 1} sur ${count} dans ${quote(level?.name ?? "")}`;
+    };
+    return {
+      onDragStart: ({ active: dragged }) => `${nameOf(dragged)} saisi, ${where(dragged, null)}.`,
+      onDragOver: ({ active: dragged, over }) =>
+        over
+          ? `${nameOf(dragged)}, ${where(dragged, over)}.`
+          : `${nameOf(dragged)} hors de la liste.`,
+      onDragEnd: ({ active: dragged, over }) =>
+        over
+          ? `${nameOf(dragged)} déposé, ${where(dragged, over)}.`
+          : `${nameOf(dragged)} relâché.`,
+      onDragCancel: ({ active: dragged }) => `Déplacement de ${nameOf(dragged)} annulé.`,
+    };
+  }, [levels, levelIds, committed]);
 
   return (
     <HighlightProvider>
@@ -363,6 +431,7 @@ function LevelSection({
   } = useSortable({
     id: level.id,
     data: { type: "level", name: level.name } satisfies DragData,
+    attributes: { roleDescription: ROLE_DESCRIPTION },
   });
   const safeMutate = useSafeMutate();
   const duplicateLevel = useDuplicateLevel(propertyId);
@@ -558,6 +627,7 @@ function SpaceRow({
   } = useSortable({
     id: space.id,
     data: { type: "space", name: space.name } satisfies DragData,
+    attributes: { roleDescription: ROLE_DESCRIPTION },
   });
   const safeMutate = useSafeMutate();
   const [renaming, setRenaming] = useState(false);
@@ -758,15 +828,6 @@ function PreviewButtons() {
 }
 
 const nameOf = (entry: Active | Over | null) => quote(dragData(entry)?.name ?? "l’élément");
-
-const announcements: Announcements = {
-  onDragStart: ({ active }) => `${nameOf(active)} saisi.`,
-  onDragOver: ({ active, over }) =>
-    over ? `${nameOf(active)} près de ${nameOf(over)}.` : `${nameOf(active)} hors de la liste.`,
-  onDragEnd: ({ active, over }) =>
-    over ? `${nameOf(active)} déposé près de ${nameOf(over)}.` : `${nameOf(active)} relâché.`,
-  onDragCancel: ({ active }) => `Déplacement de ${nameOf(active)} annulé.`,
-};
 
 const screenReaderInstructions = {
   draggable:
