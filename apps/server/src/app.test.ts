@@ -4,16 +4,20 @@ import { join } from "node:path";
 import { brotliCompressSync, brotliDecompressSync, gunzipSync } from "node:zlib";
 import {
   clientTag,
+  jsonBytes,
   MAX_DUPLICATED_SPACES,
   MAX_MUTATIONS_PER_PUSH,
+  MAX_PUSH_BYTES,
+  MAX_REQUEST_BYTES,
   mutationSchema,
   NAME_MAX_LENGTH,
   pullResponseSchema,
   pushResponseSchema,
+  takePushBatch,
 } from "@repo/shared";
 import type { Hono } from "hono";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { createApp, MAX_BODY_BYTES } from "./app";
+import { createApp } from "./app";
 import type { SqlClient } from "./db/sql";
 import { createTestDb, mutation } from "./testing";
 
@@ -106,7 +110,7 @@ describe("API", () => {
 
     const tooLarge = await app.request("/api/push", {
       method: "POST",
-      body: "x".repeat(MAX_BODY_BYTES + 1),
+      body: "x".repeat(MAX_REQUEST_BYTES + 1),
     });
     expect(tooLarge.status).toBe(413);
   });
@@ -141,8 +145,8 @@ describe("API", () => {
     const name = "\ud800".repeat(NAME_MAX_LENGTH);
     const position = `a0${"z".repeat(126)}`; // the longest valid key
     const id = (n: number) => `0199f0a0-0000-7000-8000-${n.toString(16).padStart(12, "0")}`;
-    const mutations = Array.from({ length: MAX_MUTATIONS_PER_PUSH }, (_, i) =>
-      mutation(i + 1, {
+    const largest = Array.from({ length: MAX_MUTATIONS_PER_PUSH }, (_, i) =>
+      mutation(Number.MAX_SAFE_INTEGER - MAX_MUTATIONS_PER_PUSH + i + 1, {
         name: "duplicateLevel",
         args: {
           id: id(i),
@@ -157,12 +161,25 @@ describe("API", () => {
         },
       }),
     );
-    for (const largest of mutations) expect(mutationSchema.safeParse(largest).success).toBe(true);
+    for (const copy of largest) expect(mutationSchema.safeParse(copy).success).toBe(true);
+    const app = createApp({ db });
+    const { epoch } = pullResponseSchema.parse(
+      await (await post(app, "/api/pull", { clientId: DEVICE, cursor: 0 })).json(),
+    );
+    const envelope = { clientId: DEVICE, epoch };
+    // A device can queue it: it fits a push of its own (`mutate` refuses what does not).
+    expect(jsonBytes({ ...envelope, mutations: largest.slice(0, 1) })).toBeLessThanOrEqual(
+      MAX_PUSH_BYTES,
+    );
 
-    const push = await post(createApp({ db }), "/api/push", { clientId: DEVICE, mutations });
+    // The push a device fills with them: as large as any push gets.
+    const mutations = takePushBatch(envelope, largest);
+    expect(mutations.length).toBeGreaterThan(1);
+    expect(jsonBytes({ ...envelope, mutations })).toBeLessThanOrEqual(MAX_PUSH_BYTES);
+    const push = await post(app, "/api/push", { ...envelope, mutations });
     expect(push.status).toBe(200);
     expect(pushResponseSchema.parse(await push.json())).toMatchObject({
-      lastMutationId: MAX_MUTATIONS_PER_PUSH,
+      lastMutationId: mutations.at(-1)?.id,
     });
   });
 

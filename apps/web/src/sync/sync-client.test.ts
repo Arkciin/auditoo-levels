@@ -1,4 +1,11 @@
-import { clientTag, MAX_MUTATIONS_PER_PUSH, MutationRejectedError, mutators } from "@repo/shared";
+import {
+  clientTag,
+  jsonBytes,
+  MAX_MUTATIONS_PER_PUSH,
+  MutationRejectedError,
+  MutationTooLargeError,
+  mutators,
+} from "@repo/shared";
 import { IDBFactory } from "fake-indexeddb";
 import { wrap } from "idb";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -500,6 +507,62 @@ describe("SyncClient", () => {
     ]);
     expect(server.snapshot().properties.size).toBe(count);
     expect(client.getState().status.pendingCount).toBe(0);
+  });
+
+  it("caps pushes in bytes too, so that no mutation can make one too large", async () => {
+    const server = new MemoryServer();
+    const network = new MemoryTransport(server);
+    const sizes: number[] = [];
+    const transport: Transport = {
+      push: (request) => {
+        sizes.push(jsonBytes(request)); // the body's size, as sent
+        return network.push(request);
+      },
+      pull: (request) => network.pull(request),
+    };
+    const maxPushBytes = 2_000; // `MAX_PUSH_BYTES` in production: an eighth of the server's limit
+    const client = await createClient({ indexedDB: new IDBFactory(), transport, maxPushBytes });
+    // Long names: about 300 bytes of JSON each, far fewer than 100 per push.
+    for (let n = 0; n < 12; n++) {
+      await client.mutate("createProperty", {
+        id: uuid(1_000 + n),
+        name: `${n} ${"é".repeat(70)}`,
+      });
+    }
+
+    await client.syncNow();
+
+    expect(sizes.length).toBeGreaterThan(1);
+    for (const size of sizes) expect(size).toBeLessThanOrEqual(maxPushBytes);
+    const sent = network.pushes.flat().map((mutation) => mutation.id);
+    expect(sent).toEqual(Array.from({ length: 12 }, (_, i) => i + 1)); // in order, once each
+    expect(server.snapshot().properties.size).toBe(12);
+    expect(client.getState().pending).toEqual([]);
+  });
+
+  it("refuses a change too large for a push of its own, and queues nothing", async () => {
+    const { client } = await createDevice(new MemoryServer(), { maxPushBytes: 2_000 });
+    await client.mutate("createProperty", { id: P1, name: "Maison" });
+    await client.mutate("createLevel", { id: L1, propertyId: P1, name: "RDC", position: "a0" });
+    const before = client.getState();
+    const spaces = Array.from({ length: 20 }, (_, i) => ({
+      id: uuid(100 + i),
+      name: `Chambre ${i + 1}`.padEnd(60, "."),
+      position: `a${i.toString(36)}`,
+    }));
+
+    const error = await client
+      .mutate("duplicateLevel", { id: uuid(12), sourceId: L1, name: "R+1", position: "a1", spaces })
+      .then(
+        () => undefined,
+        (reason: unknown) => reason,
+      );
+
+    expect(error).toBeInstanceOf(MutationTooLargeError);
+    expect(describeMutationError(error)).toBe(
+      "Cette modification est trop volumineuse pour être envoyée au serveur.",
+    );
+    expect(client.getState()).toBe(before);
   });
 
   it("reports server errors in French, keeps the queue, then recovers", async () => {

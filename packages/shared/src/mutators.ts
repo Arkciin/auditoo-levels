@@ -54,8 +54,8 @@ export class MutationRejectedError extends Error {
 const entityRef = z.object({ id: idSchema });
 
 /**
- * Most rooms a level copy carries. It bounds the mutation, hence the push it travels in (see
- * `MAX_BODY_BYTES` on the server), and is far above any real level.
+ * Most rooms a level copy carries. It bounds the mutation, which must fit a push of its own (see
+ * `MAX_PUSH_BYTES`), and is far above any real level.
  */
 export const MAX_DUPLICATED_SPACES = 100;
 

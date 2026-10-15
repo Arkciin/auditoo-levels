@@ -162,11 +162,12 @@ acknowledgement alone. State transitions are serialized: none can lose or double
 
 ### Push: ordered, idempotent, never blocked
 
-The device sends its outbox oldest first, in batches of up to 100. The server accepts bodies up to
-8 MiB, which the largest valid push fits (100 copies of 100-room levels with the costliest names,
-about 6.5 MiB, checked by `apps/server/src/app.test.ts`): a push refused for its size would be
-retried as it is, forever. `apps/server/src/sync/push.ts` gives **each mutation its own
-transaction**:
+The device sends its outbox oldest first, in pushes of at most 100 mutations and 1 MiB of JSON
+(`MAX_PUSH_BYTES`), an eighth of the 8 MiB the server accepts: a push refused for its size would be
+retried as it is, forever. `mutate()` refuses a mutation that would not fit a push of its own, so
+no future mutation can block a queue; today's largest, a 100-room copy with the costliest names,
+takes 69 KB (`apps/server/src/app.test.ts`). `apps/server/src/sync/push.ts` gives **each mutation
+its own transaction**:
 
 1. `SELECT version, epoch FROM server_meta … FOR UPDATE`: take the version lock, check the epoch.
 2. Skip the mutation if `id ≤ clients.last_mutation_id`: retries are no-ops; ids may have gaps.
@@ -463,8 +464,6 @@ budget and end-to-end tests on every push.
 - **A change reported as no longer applying may still reach the server**: after a database
   replacement, if another device pushes again the entity it needed. It then reappears; rare, and
   nothing is lost. No conflict UI beyond the message: re-doing the change is up to the user.
-- **Pushes are capped in count, not in bytes**: the body limit holds for today's largest mutation
-  (tested). Next: the device also caps each push in bytes, so that no future mutation can outgrow it.
 - **A level copy takes one SQL statement per room**, all while holding the version lock (checking
   that none of their ids exists takes one read for them all): a push of a 100-room copy takes 60 to
   90 ms on PGlite (measured over HTTP), more with network round trips to PostgreSQL. Next, if

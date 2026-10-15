@@ -28,6 +28,68 @@ import { idSchema, levelSchema, propertySchema, spaceSchema, timestampSchema } f
 
 export const MAX_MUTATIONS_PER_PUSH = 100;
 
+/**
+ * Largest request body the server accepts (`bodyLimit`, `apps/server/src/app.ts`). A push refused
+ * for its size would be retried as it is, forever: devices stay far below (`MAX_PUSH_BYTES`).
+ */
+export const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Most bytes of JSON a device puts in one push: an eighth of the server's limit, and quick to
+ * upload within the request timeout even on a weak mobile link (8 s at 1 Mbit/s). A device does
+ * not queue a mutation that would not fit a push of its own (`takePushBatch` never splits one).
+ */
+export const MAX_PUSH_BYTES = 1024 * 1024;
+
+/** Size in bytes of `value` as a JSON body: `JSON.stringify` encoded in UTF-8, as `fetch` sends it. */
+export function jsonBytes(value: unknown): number {
+  const json = JSON.stringify(value);
+  let bytes = 0;
+  for (let index = 0; index < json.length; index++) {
+    const code = json.charCodeAt(index);
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code >= 0xd800 && code < 0xdc00) {
+      // A surrogate pair, one 4-byte character (`JSON.stringify` escapes lone surrogates).
+      bytes += 4;
+      index += 1;
+    } else bytes += 3;
+  }
+  return bytes;
+}
+
+/**
+ * The mutations, oldest first, that the next push of `envelope` carries: as many of `mutations`
+ * as `MAX_MUTATIONS_PER_PUSH` and `maxBytes` of JSON allow, and always the first one.
+ */
+export function takePushBatch(
+  envelope: Omit<PushRequest, "mutations">,
+  mutations: readonly Mutation[],
+  maxBytes = MAX_PUSH_BYTES,
+): Mutation[] {
+  // `{…,"mutations":[]}`, then each mutation and the comma before it: exactly the body's size.
+  let bytes = jsonBytes({ ...envelope, mutations: [] });
+  const batch: Mutation[] = [];
+  for (const mutation of mutations.slice(0, MAX_MUTATIONS_PER_PUSH)) {
+    bytes += jsonBytes(mutation) + (batch.length > 0 ? 1 : 0);
+    if (batch.length > 0 && bytes > maxBytes) break;
+    batch.push(mutation);
+  }
+  return batch;
+}
+
+/**
+ * Thrown by a device asked for a mutation that would not fit a push of its own: queued, it could
+ * never reach the server. The message is user-facing (French).
+ */
+export class MutationTooLargeError extends Error {
+  override readonly name = "MutationTooLargeError";
+
+  constructor() {
+    super("Cette modification est trop volumineuse pour être envoyée au serveur.");
+  }
+}
+
 /** Per-device sequence number of a mutation, strictly increasing (gaps allowed). */
 const mutationIdSchema = z.number().int().positive();
 

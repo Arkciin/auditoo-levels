@@ -6,7 +6,13 @@
  * name. The current view is not that state (it already includes the rename): to describe the
  * whole queue, use {@link describePendingMutations}, which walks it from the base.
  */
-import { isReadable, type Mutation, MutationRejectedError, type Snapshot } from "@repo/shared";
+import {
+  isReadable,
+  type Mutation,
+  MutationRejectedError,
+  MutationTooLargeError,
+  type Snapshot,
+} from "@repo/shared";
 import { StorageClosedError } from "./storage";
 
 type EntityKind = "property" | "level" | "space";
@@ -188,6 +194,7 @@ export function describeMutationError(error: unknown): string {
   if (error instanceof MutationRejectedError) {
     return "Cette action ne s'applique plus : les données ont changé entre-temps.";
   }
+  if (error instanceof MutationTooLargeError) return error.message;
   // The page must be reloaded: the message says so.
   if (error instanceof StorageClosedError) return error.message;
   if (error instanceof Error && error.name === "QuotaExceededError") {

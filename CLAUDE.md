@@ -75,10 +75,12 @@ pnpm vitest run apps/web/src/sync/convergence.test.ts
    IndexedDB changes go through `DATABASE_VERSION` and `upgrade()` in `storage.ts`. Never delete or
    recreate the `outbox` store: its key generator allocates mutation ids.
 9. **The service worker never caches `/api`.** Data belongs to IndexedDB and the sync engine.
-10. **Every push must fit the server's body limit** (`MAX_BODY_BYTES`, `apps/server/src/app.ts`):
-    a push refused for its size is retried as it is, forever. Bound every list in a mutation's
-    arguments (`MAX_DUPLICATED_SPACES`), and keep the "largest push" test of `app.test.ts` building
-    the largest valid mutation.
+10. **Every push must fit the server's body limit** (`MAX_REQUEST_BYTES`,
+    `packages/shared/src/protocol.ts`): a push refused for its size is retried as it is, forever.
+    Devices cut pushes at `MAX_PUSH_BYTES` (`takePushBatch`) and `mutate()` refuses a mutation
+    that would not fit one on its own. Still bound every list in a mutation's arguments
+    (`MAX_DUPLICATED_SPACES`), so that every valid mutation can be queued, and keep the "largest
+    push" test of `app.test.ts` building the largest one.
 11. **No outbox entry may lock a device out.** Another version of the app may have written it.
     Read the outbox through `readStoredMutation`, replay it with `applyMutations` (any failure
     there means "does not apply here": reported once, kept for the server to judge), and check

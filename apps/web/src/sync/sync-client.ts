@@ -28,17 +28,21 @@ import {
   applyMutations,
   applyPull,
   clientTag,
+  jsonBytes,
   MAX_MUTATIONS_PER_PUSH,
+  MAX_PUSH_BYTES,
   type Mutation,
   type MutationArgs,
   type MutationName,
   MutationRejectedError,
+  MutationTooLargeError,
   mutationArgsSchemas,
   type PullResponse,
   type PushResponse,
   readStoredMutation,
   type Snapshot,
   SnapshotTx,
+  takePushBatch,
 } from "@repo/shared";
 import { describeRejection } from "./describe";
 import {
@@ -155,6 +159,11 @@ export interface SyncClientOptions {
    * @defaultValue {@link DEFAULT_CHANNEL_NAME}
    */
   readonly channelName?: string | null;
+  /**
+   * Most bytes of JSON in a push. A mutation that would not fit one on its own is refused.
+   * @defaultValue `MAX_PUSH_BYTES`, far below the server's limit
+   */
+  readonly maxPushBytes?: number;
 }
 
 /** Default name of the cross-tab BroadcastChannel and Web Lock. */
@@ -233,6 +242,7 @@ export class SyncClient {
   private readonly isOnline: () => boolean;
   private readonly eventsUrl: string | undefined;
   private readonly pullIntervalMs: number;
+  private readonly maxPushBytes: number;
   private readonly channelName: string | null;
   private readonly channel: BroadcastChannel | undefined;
   private readonly abortController = new AbortController();
@@ -321,6 +331,7 @@ export class SyncClient {
     this.isOnline = options.isOnline ?? defaultIsOnline;
     this.eventsUrl = options.eventsUrl;
     this.pullIntervalMs = options.pullIntervalMs ?? DEFAULT_PULL_INTERVAL_MS;
+    this.maxPushBytes = options.maxPushBytes ?? MAX_PUSH_BYTES;
     this.channelName =
       options.channelName === undefined ? DEFAULT_CHANNEL_NAME : options.channelName;
     this.clientId = stored.clientId;
@@ -370,6 +381,7 @@ export class SyncClient {
    * - `args` are invalid (`ZodError`);
    * - the action does not apply to the current view, e.g. it targets an entity that does not
    *   exist (`MutationRejectedError`): the user acted on stale state;
+   * - the mutation would not fit a push of its own (`MutationTooLargeError`);
    * - the device storage fails (e.g. `QuotaExceededError`).
    *
    * Show `describeMutationError(error)` to the user rather than `error.message`, which Zod 4
@@ -383,6 +395,11 @@ export class SyncClient {
   ): Promise<void> => {
     // Timestamped at call time: it records when the user acted, not when the queue got to it.
     const draft = createDraft(name, args, this.now());
+    // Queued, it would be pushed as it is, forever. Measured at its largest: with the longest id
+    // the outbox can allocate, and an epoch (a UUID, like the client id).
+    const alone = { ...draft, id: Number.MAX_SAFE_INTEGER };
+    const push = { clientId: this.clientId, epoch: this.clientId, mutations: [alone] };
+    if (jsonBytes(push) > this.maxPushBytes) throw new MutationTooLargeError();
     await this.transition(async () => {
       if (this.disposed) throw new Error("SyncClient is disposed");
       const view = await dryRun(this.state.view, draft);
@@ -542,16 +559,17 @@ export class SyncClient {
     // id, and the server skips ids at or below the last one it processed. Reading the outbox
     // guarantees we never send a mutation before an older one another tab enqueued meanwhile.
     for (;;) {
-      const mutations = await this.storage.readOutbox(this.lastAckedId, MAX_MUTATIONS_PER_PUSH);
-      if (mutations.length === 0) return;
+      const queued = await this.storage.readOutbox(this.lastAckedId, MAX_MUTATIONS_PER_PUSH);
+      if (queued.length === 0) return;
+      const envelope = { clientId: this.clientId, epoch: this.epoch ?? undefined };
+      // Capped in bytes too, far below the server's limit: a push it refused for its size would
+      // be sent again as it is, forever. The next one takes over where it stops.
+      const mutations = takePushBatch(envelope, queued, this.maxPushBytes);
       if (!this.sending) {
         this.sending = true;
         this.publish();
       }
-      const response = await this.transport.push(
-        { clientId: this.clientId, epoch: this.epoch ?? undefined, mutations },
-        { signal },
-      );
+      const response = await this.transport.push({ ...envelope, mutations }, { signal });
       this.networkDown = false;
       // Another database answered: it processed nothing, and the pull will start over.
       if (this.epoch !== null && response.epoch !== this.epoch) return;

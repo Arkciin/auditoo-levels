@@ -1,7 +1,13 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { clientTag, type PushResponse, pullRequestSchema, pushRequestSchema } from "@repo/shared";
+import {
+  clientTag,
+  MAX_REQUEST_BYTES,
+  type PushResponse,
+  pullRequestSchema,
+  pushRequestSchema,
+} from "@repo/shared";
 import { type Context, Hono, type MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { except } from "hono/combine";
@@ -24,12 +30,6 @@ export interface AppOptions {
   signal?: AbortSignal | undefined;
 }
 
-/**
- * Must fit the largest push a device can send, or that push would be retried as it is, forever,
- * blocking the device's queue: 100 mutations, at worst level copies of 100 rooms with the most
- * expensive names, about 6.5 MiB of JSON (see app.test.ts).
- */
-export const MAX_BODY_BYTES = 8 * 1024 * 1024;
 // Below the idle timeout of common proxies and load balancers (30 to 60 seconds).
 const HEARTBEAT_INTERVAL_MS = 25_000;
 const IMMUTABLE = "public, max-age=31536000, immutable";
@@ -50,10 +50,12 @@ export function createApp({ db, staticDir, signal }: AppOptions): Hono {
     // Sync data must never come from a cache; a route with its own policy (SSE) keeps it.
     if (!c.res.headers.has("Cache-Control")) c.header("Cache-Control", "no-store");
   });
+  // Must fit any push a device sends, or that push would be retried as it is, forever, blocking
+  // the device's queue: devices cap theirs far below (`MAX_PUSH_BYTES`, see app.test.ts).
   app.use(
     "/api/*",
     bodyLimit({
-      maxSize: MAX_BODY_BYTES,
+      maxSize: MAX_REQUEST_BYTES,
       onError: (c) => c.json({ error: "payload_too_large" }, 413),
     }),
   );
