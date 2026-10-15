@@ -7,6 +7,7 @@ import { toast } from "sonner";
 
 import { StorageUnavailable } from "./components/storage-unavailable";
 import { captureInstallPrompt } from "./install";
+import { markDocumentStart } from "./lib/document-history";
 import { registerServiceWorker } from "./pwa";
 import { routeTree } from "./routeTree.gen";
 import { createBrowserSyncClient, SyncProvider } from "./sync";
@@ -14,6 +15,7 @@ import { createBrowserSyncClient, SyncProvider } from "./sync";
 // Before anything is awaited: the browser offers installation once, possibly very early.
 captureInstallPrompt();
 
+markDocumentStart();
 const router = createRouter({
   routeTree,
   defaultPreload: "intent",
