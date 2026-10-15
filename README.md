@@ -53,9 +53,10 @@ What to try on a phone (Chrome on Android, Safari on iOS):
 - **Delete without fear**: swipe a room left to delete it; a level or a logement, which takes its
   rooms with it, only reveals a « Supprimer » button. Each delete has its « Annuler » toast, and
   later « Logements supprimés » and « Éléments supprimés », in the ⋮ menus, bring things back.
-- **Work offline**: switch to airplane mode and keep going. Changes show at once, stay on the
-  device, and sync by themselves when the network returns. The header pill says « Hors ligne »,
-  or « Serveur injoignable » when the network is up but the server does not answer.
+- **Work offline**: once a toast says that Relevé works without network, switch to airplane mode
+  and keep going, reloads included. Changes show at once, stay on the device, and sync by
+  themselves when the network returns. The header pill says « Hors ligne », or « Serveur
+  injoignable » when the network is up but the server does not answer.
 - **See the sync**: the pill (À jour, En attente, Envoi…, Hors ligne, Serveur injoignable, Erreur)
   opens the list of pending changes and « Synchroniser maintenant ». A change the server refuses is
   announced in a toast and listed there, never dropped silently.
@@ -63,8 +64,8 @@ What to try on a phone (Chrome on Android, Safari on iOS):
   seconds (server-sent events), and conflicts resolve the same way everywhere
   (see [DESIGN.md](DESIGN.md#conflict-policy)).
 - **Install it**: « Installer l’application » in the home menu (the browser's prompt on Android,
-  Safari's steps on iPhone and iPad). A toast says when the app works offline; updates wait for a
-  tap on « Mettre à jour ».
+  Safari's steps on iPhone and iPad, and why it matters there). Updates wait for a tap on « Mettre
+  à jour ».
 - **Built for one thumb, and for everyone**: French UI, dark mode, 44 px targets, Atkinson
   Hyperlegible Next, long addresses shown in full, a back button that never reopens a logement
   just left, screen reader announcements in French.
