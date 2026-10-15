@@ -184,16 +184,17 @@ production build (`pnpm start`) with an empty database. Median of 7 runs, 15 Oct
 
 | Performance | Accessibility | Best practices | SEO |
 | :---: | :---: | :---: | :---: |
-| 90 | 100 | 100 | 100 |
+| 91 | 100 | 100 | 100 |
 
-First Contentful Paint 2.2 s, Largest Contentful Paint 2.7 s, Total Blocking Time 240 ms,
+First Contentful Paint 2.3 s, Largest Contentful Paint 2.6 s, Total Blocking Time 170 ms,
 Cumulative Layout Shift 0. Measured with Chromium 141 on a 2-vCPU Linux container shared with
 other builds, the browser at raised CPU priority to limit their effect: performance ranged from
-87 to 91 across runs. Before the preloads, Brotli and the sliced first render, one run gave 80,
-and SEO 91 (no robots.txt). What remains is starting a client-rendered app on a slow phone:
-evaluating React, the router and Zod, then React's first commit, where both bottom sheets of the
-home screen mount closed and vaul forces a layout for each. Next steps: mount sheets on first
-open, and prerender the app shell into `index.html` so that something paints before the
+84 to 95 across runs. Before the preloads, Brotli and the sliced first render, one run gave 80,
+and SEO 91 (no robots.txt). Mounting bottom sheets on their first opening rather than closed
+with the home screen moved nothing beyond that noise: the build before it, measured in turns with
+it, also had a median of 91 (Total Blocking Time 200 ms). What remains is starting a
+client-rendered app on a slow phone: evaluating React, the router and Zod, then React's first
+commit. Next step: prerender the app shell into `index.html` so that something paints before the
 JavaScript runs.
 
 What a phone downloads (`pnpm size`; CI fails past a budget):
